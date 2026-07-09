@@ -1,0 +1,14 @@
+{
+  "provider": {
+    "oxidegate": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8899/v1"
+      },
+      "models": {
+        "claude-opus-4-8": {}
+      }
+    }
+  },
+  "plugin": ["./.opencode/plugins/oxidegate-lens.ts"]
+}

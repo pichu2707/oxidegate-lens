@@ -1,0 +1,8 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/absolute/path/to/oxidegate-lens/bin/oxidegate-status.mjs",
+    "padding": 2,
+    "refreshInterval": 5
+  }
+}
