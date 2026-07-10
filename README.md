@@ -109,6 +109,16 @@ paso a paso están en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
 
 ---
 
+## En qué harnesses sirve
+
+Medir el costo de MCP no aplica igual en todos los asistentes de código. Algunos
+ya difieren los esquemas (Claude Code), otros llaman desde su nube y no se pueden
+medir en local (Warp), y solo uno expone un slot de UI para un panel propio
+(OpenCode). El mapa completo — con la trampa de que «acepta base_url» no significa
+«medible» — está en **[docs/COMPATIBILIDAD-HARNESSES.md](docs/COMPATIBILIDAD-HARNESSES.md)**.
+
+---
+
 ## Por qué es un repo aparte
 
 `oxidegate-lens` vive separado de OxideGate a propósito:
