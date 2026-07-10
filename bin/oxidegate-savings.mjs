@@ -155,16 +155,20 @@ async function main() {
   }
 
   process.stdout.write('\n');
+  // Singular vs plural: "el servidor MCP" reads wrong as "los 1 servidores MCP".
+  const n = removable.length;
+  const serversPhrase = n === 1 ? 'el servidor MCP' : `los ${n} servidores MCP`;
   process.stdout.write(
-    `ahorro por petición desconectando los ${removable.length} servidores MCP: ` +
+    `ahorro por petición desconectando ${serversPhrase}: ` +
       `${humanizeBytes(removableBytes)}` +
       (toolsBytes ? ` (${share(removableBytes)} de los tools)` : '') +
       '\n',
   );
 
   if (seen) {
+    const reqWord = seen === 1 ? 'petición observada' : 'peticiones observadas';
     process.stdout.write(
-      `ya re-enviados en ${seen} peticiones observadas: ${humanizeBytes(removableBytes * seen)}\n`,
+      `ya re-enviados en ${seen} ${reqWord}: ${humanizeBytes(removableBytes * seen)}\n`,
     );
   }
 
