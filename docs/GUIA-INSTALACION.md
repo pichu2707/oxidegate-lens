@@ -1,7 +1,7 @@
 # Guía de instalación — paso a paso
 
-Pensada para alguien **sin experiencia técnica**. Seguí los pasos en orden,
-copiá y pegá lo que se indica, y funciona.
+Pensada para alguien **sin experiencia técnica**. Sigue los pasos en orden,
+copia y pega lo que se indica, y funciona.
 
 `oxidegate-lens` **no mide nada**: solo muestra datos que ya calculó OxideGate.
 Por eso, la regla que no falla:
@@ -9,25 +9,25 @@ Por eso, la regla que no falla:
 > **Si OxideGate no está encendido, no hay nada para mostrar. Nunca.**
 
 Este proyecto tiene **una superficie principal** (el reporte de ahorro) y **dos
-avanzadas** (experimentales). Si es tu primera vez, hacé **solo la Parte A**. Las
+avanzadas** (experimentales). Si es tu primera vez, haz **solo la Parte A**. Las
 partes B y C son opcionales.
 
 ---
 
 ## Antes de empezar
 
-Marcá cada casilla:
+Marca cada casilla:
 
 - [ ] **OxideGate encendido** y respondiendo (por ejemplo en `http://127.0.0.1:8899`).
 - [ ] **Node 24 o superior**. Para comprobarlo, en una terminal:
   ```sh
   node --version
   ```
-  Si ves `v24.` o mayor, estás bien.
+  Si ves `v24.` o mayor, está bien.
 - [ ] Saber **en qué puerto** corre tu OxideGate. Por defecto es `8080`, pero
-  suele ser otro (ej. `8899`). Anotalo: lo vas a usar varias veces.
+  suele ser otro (ej. `8899`). Anótalo: lo vas a usar varias veces.
 
-> En esta guía usamos **8899** como ejemplo. Si el tuyo es otro, reemplazá `8899`
+> En esta guía usamos **8899** como ejemplo. Si el tuyo es otro, sustituye `8899`
 > por tu número en todos lados.
 
 ### Comprobá que OxideGate está encendido
@@ -36,8 +36,8 @@ Marcá cada casilla:
 curl http://127.0.0.1:8899/stats
 ```
 
-- Aparece texto con datos → **encendido**. Seguí.
-- Dice `Connection refused` → **apagado**. Encendé OxideGate y volvé a probar.
+- Aparece texto con datos → **encendido**. Sigue.
+- Dice `Connection refused` → **apagado**. Enciende OxideGate y vuelve a probar.
 
 ---
 
@@ -48,7 +48,7 @@ Es un **comando de terminal**, no un panel dentro de ningún editor.
 
 ### Paso 1 — Ubicarte en la carpeta del proyecto
 
-En la terminal, entrá a la carpeta de `oxidegate-lens` (donde está este repo).
+En la terminal, entra en la carpeta de `oxidegate-lens` (donde está este repo).
 
 ### Paso 2 — Correr el reporte
 
@@ -59,8 +59,8 @@ OXIDEGATE_PORT=8899 node bin/oxidegate-savings.mjs
 Eso es todo. Vas a ver una tabla con cada servidor MCP, cuántos bytes pesa, y
 cuánto ahorrarías desconectándolo.
 
-> **Truco opcional para no escribir la ruta larga cada vez:** una sola vez, corré
-> `npm link` dentro de la carpeta. Después podés llamar `oxidegate-savings` desde
+> **Truco opcional para no escribir la ruta larga cada vez:** una sola vez, ejecuta
+> `npm link` dentro de la carpeta. Después puedes llamar a `oxidegate-savings` desde
 > cualquier lugar:
 > ```sh
 > OXIDEGATE_PORT=8899 oxidegate-savings
@@ -68,15 +68,15 @@ cuánto ahorrarías desconectándolo.
 
 ### ¿Salió vacío o dio error?
 
-Revisá, en este orden (el 90% está en los dos primeros):
+Revisa, en este orden (el 90% está en los dos primeros):
 
 1. **¿OxideGate está encendido?** `curl http://127.0.0.1:8899/stats` tiene que responder.
 2. **¿El puerto es el correcto?** El de `OXIDEGATE_PORT` debe ser el de tu OxideGate.
 3. **¿Pasó tráfico real con MCP?** El reporte muestra la última petición **con
-   herramientas declaradas**. Si recién arrancaste todo, usá tu agente un rato y
-   volvé a correr el comando.
+   herramientas declaradas**. Si acabas de arrancarlo todo, usa tu agente un rato y
+   vuelve a ejecutar el comando.
 
-**Con la Parte A ya tenés lo esencial del proyecto.** Lo de abajo es opcional.
+**Con la Parte A ya tienes lo esencial del proyecto.** Lo de abajo es opcional.
 
 ---
 
@@ -87,13 +87,13 @@ Muestra una línea de resumen por-petición en la barra de estado de Claude Code
 
 ### Paso 1 — Editar la configuración de Claude Code
 
-El archivo está en `~/.claude/settings.json`. Hacé una copia primero:
+El archivo está en `~/.claude/settings.json`. Haz una copia primero:
 
 ```sh
 cp ~/.claude/settings.json ~/.claude/settings.json.bak
 ```
 
-Agregá este bloque (poné la **ruta absoluta real** al script dentro de tu copia
+Añade este bloque (pon la **ruta absoluta real** al script dentro de tu copia
 del proyecto):
 
 ```json
@@ -107,7 +107,7 @@ del proyecto):
 
 ### Paso 2 — Reiniciar Claude Code
 
-Cerralo y abrilo. En la barra de estado deberías ver algo como:
+Ciérralo y ábrelo. En la barra de estado deberías ver algo como:
 
 ```
 oxidegate  claude-opus-4-8  tax 89.5%  tools 159.1 kB  ttft 3.0s  $0.2464
@@ -115,7 +115,7 @@ oxidegate  claude-opus-4-8  tax 89.5%  tools 159.1 kB  ttft 3.0s  $0.2464
 
 Igual que siempre: la status line solo **muestra**. Para que haya datos, el
 tráfico de Claude tiene que pasar por OxideGate (eso se configura del lado de
-**OxideGate**, no acá).
+**OxideGate**, no aquí).
 
 ---
 
@@ -124,7 +124,7 @@ tráfico de Claude tiene que pasar por OxideGate (eso se configura del lado de
 > ⚠️ **Aviso honesto:** este plugin **nunca se probó** contra un OpenCode real.
 > El hook que usa (`tool.execute.after`) no está verificado. Puede no funcionar
 > como se describe. Es un punto de partida, no una integración probada. Si estás
-> empezando, **salteate esta parte**.
+> empezando, **sáltate esta parte**.
 
 En OpenCode hacen falta **dos piezas**, no una:
 
@@ -147,9 +147,9 @@ Copia de seguridad primero:
 cp ~/.config/opencode/opencode.json ~/.config/opencode/opencode.json.bak
 ```
 
-Agregá **dos cosas**:
+Añade **dos cosas**:
 
-**a) El bloque del proveedor** (la pieza que enruta). Cambiá `8899` por tu puerto:
+**a) El bloque del proveedor** (la pieza que enruta). Cambia `8899` por tu puerto:
 
 ```json
 "provider": {
@@ -161,13 +161,13 @@ Agregá **dos cosas**:
 }
 ```
 
-**b) El plugin en la lista `plugin`** (usá tu ruta real de usuario):
+**b) El plugin en la lista `plugin`** (usa tu ruta real de usuario):
 
 ```
 "file:///home/TU_USUARIO/.config/opencode/plugins/oxidegate-lens.ts"
 ```
 
-> ⚠️ El JSON es quisquilloso con las comas: cada elemento se separa con coma,
+> ⚠️ El JSON es estricto con las comas: cada elemento se separa con coma,
 > **menos el último**. Un error al abrir OpenCode casi siempre es una coma de más
 > o de menos.
 
@@ -175,19 +175,19 @@ Agregá **dos cosas**:
 
 OxideGate es un **proxy transparente**: la API key que pongas se **reenvía al
 proveedor real de arriba** (para `claude-opus-4-8`, Anthropic). No es una key
-"de OxideGate". Al arrancar, OpenCode te la va a pedir.
+"de OxideGate". Al arrancar, OpenCode te la pedirá.
 
-- Probá primero con un valor cualquiera (ej. `sk-oxidegate-local`). Si OxideGate
+- Prueba primero con un valor cualquiera (ej. `sk-oxidegate-local`). Si OxideGate
   no valida la key del cliente, con eso alcanza.
-- Si da error de auth, poné tu **API key real de Anthropic** (`sk-ant-...`).
+- Si da error de auth, pon tu **API key real de Anthropic** (`sk-ant-...`).
 
 > Tu login por OAuth de Anthropic (el del CLI) **no** cubre este camino: es para
 > el proveedor nativo, no para este `openai-compatible` que pasa por el proxy.
 
 ### Paso 4 — Elegir el modelo y reiniciar
 
-Dentro de OpenCode, usá el modelo del proveedor **`oxidegate`** (si usás otro, el
-tráfico no pasa por el proxy). Reiniciá OpenCode. La primera vez tarda un poco
+Dentro de OpenCode, usa el modelo del proveedor **`oxidegate`** (si usas otro, el
+tráfico no pasa por el proxy). Reinicia OpenCode. La primera vez tarda un poco
 porque instala solo el paquete del proveedor.
 
 ---
@@ -195,19 +195,19 @@ porque instala solo el paquete del proveedor.
 ## Cómo desinstalar
 
 **Reporte de ahorro (Parte A):** nada que desinstalar; es solo un comando. Si
-hiciste `npm link`, corré `npm unlink -g oxidegate-lens`.
+hiciste `npm link`, ejecuta `npm unlink -g oxidegate-lens`.
 
-**Status line (Parte B):** borrá el bloque `statusLine` de
-`~/.claude/settings.json`, o restaurá tu copia `.bak`.
+**Status line (Parte B):** borra el bloque `statusLine` de
+`~/.claude/settings.json`, o restaura tu copia `.bak`.
 
-**Plugin OpenCode (Parte C):** borrá el bloque `provider.oxidegate` y la línea
-del plugin en `opencode.json`, y borrá
-`~/.config/opencode/plugins/oxidegate-lens.ts`. O restaurá tu copia `.bak`.
+**Plugin OpenCode (Parte C):** borra el bloque `provider.oxidegate` y la línea
+del plugin en `opencode.json`, y borra
+`~/.config/opencode/plugins/oxidegate-lens.ts`. O restaura tu copia `.bak`.
 
 ---
 
 ## En una frase
 
-**OxideGate mide y enruta. `oxidegate-lens` solo muestra.** Empezá por la Parte A
-(el reporte de ahorro): es el corazón del proyecto y lo único que necesitás para
-responder "¿cuánto me ahorro desconectando MCP?".
+**OxideGate mide y enruta. `oxidegate-lens` solo muestra.** Empieza por la Parte A
+(el reporte de ahorro): es el corazón del proyecto y lo único que necesitas para
+responder "¿cuánto ahorro desconectando MCP?".

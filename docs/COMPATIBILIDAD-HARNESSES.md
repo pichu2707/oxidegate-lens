@@ -4,7 +4,7 @@ Este documento responde una sola pregunta: **¿en qué asistentes de código (ha
 sirve `oxidegate-lens`, y de qué forma?** Está basado en un barrido de ~18 herramientas
 y en mediciones reales sobre el cable con OxideGate, no en suposiciones.
 
-Si venís a instalar, andá a [`GUIA-INSTALACION.md`](./GUIA-INSTALACION.md). Esto es el
+Si vas a instalarlo, ve a [`GUIA-INSTALACION.md`](./GUIA-INSTALACION.md). Esto es el
 mapa de terreno: qué se puede medir, qué no, y por qué.
 
 ---

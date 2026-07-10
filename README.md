@@ -1,3 +1,5 @@
+![Logo de OxideGate-Lens](image/logo-oxidegate-lens.png)
+
 # oxidegate-lens
 
 Muestra **cuántos bytes te cuesta cada servidor MCP en cada petición** y cuánto
@@ -6,15 +8,15 @@ dejarías de enviar al desconectarlo. Lee esos datos de [OxideGate](https://gith
 
 ---
 
-## Empezá acá
+## Empieza aquí
 
 Un solo camino, tres pasos:
 
-| | Paso | Comando / acción |
-|--|------|------------------|
-| **1** | Encendé OxideGate y confirmá que responde | `curl http://127.0.0.1:8899/stats` debe devolver datos |
-| **2** | Corré el reporte de ahorro | `OXIDEGATE_PORT=8899 node bin/oxidegate-savings.mjs` |
-| **3** | Leé la tabla | ↓ es exactamente lo que vas a ver |
+|       | Paso                                       | Comando / acción                                       |
+| ----- | ------------------------------------------ | ------------------------------------------------------ |
+| **1** | Enciende OxideGate y confirma que responde | `curl http://127.0.0.1:8899/stats` debe devolver datos |
+| **2** | Ejecuta el reporte de ahorro               | `OXIDEGATE_PORT=8899 node bin/oxidegate-savings.mjs`   |
+| **3** | Lee la tabla                               | ↓ es exactamente lo que vas a ver                      |
 
 ```
 fuente: 2026-07-10T19:26:53Z  claude-opus-4-8  (anthropic)
@@ -35,19 +37,19 @@ ya re-enviados en 10 peticiones observadas: 728.6 kB
 > (1) OxideGate está apagado, (2) el puerto no es el que pusiste en `OXIDEGATE_PORT`,
 > o (3) todavía no pasó ninguna petición **con MCP** por el proxy. No hay una cuarta.
 
-Alternativa cómoda: `npm link` una vez y después llamás `oxidegate-savings` desde
+Alternativa cómoda: ejecuta `npm link` una vez y después llama a `oxidegate-savings` desde
 cualquier lado (en vez de `node bin/oxidegate-savings.mjs`).
 
 ### Qué significa cada columna
 
-| Columna | Qué es |
-|---------|--------|
-| `SERVIDOR` | El servidor que aporta esas herramientas (`(native)` es el propio agente). |
-| `KIND` | `mcp` = servidor MCP conectado; `native` = superficie del agente. |
-| `TOOLS` | Cuántas herramientas declara ese servidor. |
-| `BYTES` | Cuánto pesan sus esquemas en el cuerpo de **cada** petición. |
-| `% TOOLS` | Qué porción del total de herramientas representa. |
-| `¿SE PUEDE QUITAR?` | `mcp` → sí, desconectándolo. `native` → sólo con `--tools`. |
+| Columna             | Qué es                                                                     |
+| ------------------- | -------------------------------------------------------------------------- |
+| `SERVIDOR`          | El servidor que aporta esas herramientas (`(native)` es el propio agente). |
+| `KIND`              | `mcp` = servidor MCP conectado; `native` = superficie del agente.          |
+| `TOOLS`             | Cuántas herramientas declara ese servidor.                                 |
+| `BYTES`             | Cuánto pesan sus esquemas en el cuerpo de **cada** petición.               |
+| `% TOOLS`           | Qué porción del total de herramientas representa.                          |
+| `¿SE PUEDE QUITAR?` | `mcp` → sí, desconectándolo. `native` → sólo con `--tools`.                |
 
 ---
 
@@ -77,7 +79,7 @@ Ignorarlas lleva a conclusiones falsas:
   Un byte medido es un hecho; un token inferido, una conjetura.
 - **Las filas `native` no se quitan desconectando nada.** Son la superficie de
   herramientas del propio agente. Sólo se reducen con `--tools <lista>`, que
-  cambia lo que el agente **puede hacer**, no sólo lo que carga. Ojo:
+  cambia lo que el agente **puede hacer**, no sólo lo que carga. Atención:
   `--disallowedTools` no sirve — es una puerta de permisos, no de carga; el
   esquema viaja igual.
 
