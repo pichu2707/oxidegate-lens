@@ -10,5 +10,5 @@
       }
     }
   },
-  "plugin": ["./.opencode/plugins/oxidegate-lens.ts"]
+  "plugin": ["./opencode/oxidegate-lens.ts"]
 }
