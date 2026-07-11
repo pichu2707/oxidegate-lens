@@ -18,26 +18,64 @@ partes B y C son opcionales.
 
 Marca cada casilla:
 
-- [ ] **OxideGate encendido** y respondiendo (por ejemplo en `http://127.0.0.1:8899`).
 - [ ] **Node 24 o superior**. Para comprobarlo, en una terminal:
   ```sh
   node --version
   ```
   Si ves `v24.` o mayor, está bien.
-- [ ] Saber **en qué puerto** corre tu OxideGate. Por defecto es `8080`, pero
-  suele ser otro (ej. `8899`). Anótalo: lo vas a usar varias veces.
+- [ ] Tener el repo de **OxideGate** en tu máquina (es un proyecto aparte).
 
-> En esta guía usamos **8899** como ejemplo. Si el tuyo es otro, sustituye `8899`
-> por tu número en todos lados.
+> En esta guía usamos el puerto **8899** en todos los ejemplos. Si eliges otro,
+> sustituye `8899` por tu número en todos los comandos.
 
-### Comprobá que OxideGate está encendido
+---
+
+## Paso 0 — Encender OxideGate
+
+Sin esto no hay nada que mostrar. Abre una terminal, entra en la carpeta de
+OxideGate y lanza el proxy:
+
+```sh
+OXIDEGATE_PORT=8899 cargo run --bin oxidegate
+```
+
+**Deja esa terminal abierta**: el proxy vive ahí. Si la cierras, se apaga.
+
+Cuando arranca bien, verás algo así:
+
+```
+🛰️  Escuchando en http://127.0.0.1:8899
+📊 Estadísticas en vivo por modelo en http://127.0.0.1:8899/stats
+🧾 Últimos requests en vivo en http://127.0.0.1:8899/requests
+```
+
+### Comprueba que responde
+
+En **otra** terminal:
 
 ```sh
 curl http://127.0.0.1:8899/stats
 ```
 
-- Aparece texto con datos → **encendido**. Sigue.
-- Dice `Connection refused` → **apagado**. Enciende OxideGate y vuelve a probar.
+- Devuelve `[]` o datos → **encendido**. Sigue.
+- Dice `Connection refused` → **apagado**. Vuelve arriba.
+
+### ⚠️ El fallo más común: el puerto 8080 ya está ocupado
+
+El puerto por defecto de OxideGate es el **8080** — el mismo que usan Apache,
+Tomcat, Jenkins y media docena de herramientas más. Si lo tienes ocupado y
+arrancas OxideGate sin `OXIDEGATE_PORT`, **no arranca** (`Address already in
+use`), o peor: crees que arrancó y en realidad estás hablando con otro programa.
+
+Para ver quién tiene cogido el 8080:
+
+```sh
+ss -ltn | grep :8080
+```
+
+No te pelees con el 8080. Usa otro puerto con `OXIDEGATE_PORT`, como hacemos
+aquí con el 8899. **Ese mismo número tiene que ir en todos los pasos siguientes**
+(el reporte, el bloque `provider` de OpenCode, el monitor).
 
 ---
 

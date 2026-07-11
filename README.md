@@ -10,13 +10,18 @@ dejarías de enviar al desconectarlo. Lee esos datos de [OxideGate](https://gith
 
 ## Empieza aquí
 
-Un solo camino, tres pasos:
+Un solo camino, cuatro pasos:
 
 |       | Paso                                       | Comando / acción                                       |
 | ----- | ------------------------------------------ | ------------------------------------------------------ |
-| **1** | Enciende OxideGate y confirma que responde | `curl http://127.0.0.1:8899/stats` debe devolver datos |
-| **2** | Ejecuta el reporte de ahorro               | `OXIDEGATE_PORT=8899 node bin/oxidegate-savings.mjs`   |
-| **3** | Lee la tabla                               | ↓ es exactamente lo que vas a ver                      |
+| **1** | Enciende OxideGate (desde su repo)         | `OXIDEGATE_PORT=8899 cargo run --bin oxidegate`        |
+| **2** | Confirma que responde                      | `curl http://127.0.0.1:8899/stats` debe devolver datos |
+| **3** | Ejecuta el reporte de ahorro               | `OXIDEGATE_PORT=8899 node bin/oxidegate-savings.mjs`   |
+| **4** | Lee la tabla                               | ↓ es exactamente lo que vas a ver                      |
+
+> **No uses el puerto por defecto (8080)**: lo suelen tener ocupado Apache, Tomcat
+> y compañía. Si el 8080 está cogido, OxideGate no arranca. Fija otro con
+> `OXIDEGATE_PORT` — aquí usamos 8899 — y usa **ese mismo número** en todos los pasos.
 
 ```
 fuente: 2026-07-10T19:26:53Z  claude-opus-4-8  (anthropic)
