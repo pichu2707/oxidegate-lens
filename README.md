@@ -263,8 +263,18 @@ Ignorarlas lleva a conclusiones falsas:
 
 ## Requisitos
 
-- **OxideGate** en ejecución y accesible por HTTP (puerto por defecto `8080`; en
+- **OxideGate en ejecución** y accesible por HTTP (puerto por defecto `8080`; en
   desarrollo suele ser otro, ej. `8899`, vía la variable `OXIDEGATE_PORT`).
+
+### Compatibilidad de versiones
+
+| oxidegate-lens | OxideGate | Qué pasa |
+|---|---|---|
+| `0.2.x` | `>= 0.2.0` | Todo. Incluye el bloque «tokens de contexto» (`deferred_tools`, por servidor). |
+| `0.2.x` | `< 0.2.0` | **No se rompe.** Los campos nuevos no existen en ese proxy, así que el reporte los da por **DESCONOCIDOS** y lo dice. Un dato ausente NUNCA se muestra como un cero. |
+
+Esa degradación no es una promesa: está **cubierta por tests** (`test/oxidegate-savings.test.mjs`,
+defectos 5 y 6). Si alguien la rompe, la suite se pone roja.
 - **Node 24 o superior** (usa `fetch` y `AbortSignal.timeout` globales, sin
   dependencias externas).
 - **El comando `claude` en el PATH**, sólo si querés el bloque "disponibles vs.
