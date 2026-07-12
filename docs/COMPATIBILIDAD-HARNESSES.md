@@ -51,7 +51,7 @@ Por eso la columna que importa no es «¿acepta base_url?» sino **«¿medible e
 | Harness | Carga eager | Slot UI de terceros | Medible en local | Clasificación |
 |---|---|---|---|---|
 | **OpenCode** | Sí | Sí (`slots.register`) | **Sí, verificado** | **Target in-harness (único limpio)** |
-| Claude Code | No (difiere por defecto) | Sí (statusline/plugins) | Sí, verificado | Ya resuelto — nada que mostrar |
+| Claude Code | No por defecto — pero cae a eager detrás de un `ANTHROPIC_BASE_URL` no-first-party (OxideGate lo es) | Sí (statusline/plugins) | Sí, verificado | Lens sobre proxy — el costo medido es artefacto del propio proxy (ver conclusión 4) |
 | **Codex CLI** | Desconocido | No | Sí, verificado | Lens sobre proxy |
 | **Gemini CLI** | Desconocido | No | Sí, verificado | Lens sobre proxy |
 | pi.dev | No (lazy por defecto; eager opt-in) | Widget/statusline (sin sidebar) | Probable (pendiente) | Condicional (solo con servers eager) |
@@ -92,8 +92,46 @@ Por eso la columna que importa no es «¿acepta base_url?» sino **«¿medible e
 3. **Warp queda fuera del alcance local.** Orquesta en su nube y rechaza `localhost`.
    Medible solo con un túnel público, lo que no es un flujo razonable para un usuario.
 
-4. **Claude Code no necesita esto.** Difiere los esquemas MCP por defecto (tool search):
-   el costo ya está mitigado por el propio cliente. No hay ahorro que mostrar.
+4. **Claude Code sí necesita esto — pero no por lo que decía esta fila antes.** Difiere
+   los esquemas MCP por defecto (`ENABLE_TOOL_SEARCH`). Pero los docs oficiales de
+   Anthropic dicen que ese default **cae a carga completa** detrás de un
+   `ANTHROPIC_BASE_URL` no-first-party — y OxideGate es exactamente eso: medir el costo
+   de MCP a través del proxy es lo que rompe el propio diferido que se quería medir.
+
+   Esto ya no es una cita: es un A/B medido con grupo de control y servidor sonda
+   (mismo `claude -p`, mismo modelo, mismo proxy, única variable `ENABLE_TOOL_SEARCH`):
+
+   | | `ENABLE_TOOL_SEARCH=1` | control (default, vía OxideGate) |
+   |---|---:|---:|
+   | Tools nativas en el cable | 11 tools / 54.981 B | 29 tools / 103.439 B |
+   | Servidores MCP en el cable | 0 | 2+ (incl. la sonda, 2.198 B) |
+   | Servidor sonda (registrado a propósito, conexión confirmada en los dos brazos) | AUSENTE | PRESENTE |
+
+   El delta es de decenas de kB por petición en ESTE A/B, con grupo de control y una
+   sonda cuya conexión está confirmada en los dos brazos — el mecanismo (el proxy rompe
+   el diferido) está PROBADO, no supuesto. Lo que una petición individual NO puede
+   confirmar es que el mecanismo es la causa de ESA petición puntual: un cliente que
+   desactivó `ENABLE_TOOL_SEARCH` a mano produce el mismo body — ahí el costo es real, no
+   un artefacto.
+
+   `oxidegate-lens` ya no intenta adivinar la causa desde el cable (User-Agent, o el
+   campo `client_defer_loading` que este mismo A/B midió en `false` en los DOS brazos y
+   que por eso se eliminó de OxideGate). En su lugar compara cuántos servidores MCP
+   tenés **disponibles** (`claude mcp list`, leído en la propia máquina) contra cuántos
+   **llegaron** al cable (`tools_by_server`) — ver `lib/mcp-config.mjs` y el bloque
+   "disponibles vs. llegados" en `bin/oxidegate-savings.mjs` — y se detiene en la
+   resta: no elige entre "tu harness los retiene" y "todavía no conectaron", porque las
+   dos son causas reales de una ausencia y una sola petición no permite distinguirlas
+   (medido: `docs/optimizer-tool-search.md` §3.1.4, un conector remoto ausente en la
+   petición #1 y presente, sin marcar, en la #3 siete segundos después). Ojo con una
+   confusión distinta: esto es sobre si la fila EXISTE en el body — nunca sobre si
+   alguna tool de esa fila trae `defer_loading`. `deferred_tools` no decide ni la resta
+   ni el veredicto de bytes de ningún servidor MCP: `defer_loading` marca una definición
+   que igual viaja entera en el body (busca sobre lo declarado en el request), así que
+   nunca abarata una fila en bytes — sólo dice cuánto de esa fila ocupa el contexto del
+   modelo, una unidad aparte, impresa en su propio bloque. Detalle completo, incluida la
+   medición de por qué esto también infla las tools **nativas**:
+   `docs/optimizer-tool-search.md` §2.2 y §3 en el repo de OxideGate.
 
 ---
 
@@ -103,4 +141,4 @@ Por eso la columna que importa no es «¿acepta base_url?» sino **«¿medible e
   cliente-vs-nube antes de darla por buena.
 - Medir OpenCode en local con OxideGate para cuantificar el MCP eager real por request.
 
-_Última actualización: 2026-07-10._
+_Última actualización: 2026-07-12._

@@ -24,6 +24,9 @@ Marca cada casilla:
   ```
   Si ves `v24.` o mayor, está bien.
 - [ ] Tener el repo de **OxideGate** en tu máquina (es un proyecto aparte).
+- [ ] (Opcional, sólo si usás Claude Code) el comando `claude` en tu PATH. El reporte
+  lo usa para leer tu configuración MCP declarada y compararla contra lo que llegó al
+  cable. Sin él, el reporte igual funciona — sólo pierde esa comparación y lo dice.
 
 > En esta guía usamos el puerto **8899** en todos los ejemplos. Si eliges otro,
 > sustituye `8899` por tu número en todos los comandos.
@@ -81,8 +84,45 @@ aquí con el 8899. **Ese mismo número tiene que ir en todos los pasos siguiente
 
 # Parte A — El reporte de ahorro (principal)
 
-Esto es lo que responde "¿cuánto peso me ahorro desconectando cada servidor MCP?".
-Es un **comando de terminal**, no un panel dentro de ningún editor.
+Esto es lo que responde "¿cuánto peso me ahorro desconectando cada servidor MCP?" —
+**cuando la respuesta es un ahorro real**. Es un **comando de terminal**, no un panel
+dentro de ningún editor.
+
+> **Importante si usás Claude Code:** necesita el comando `claude` en tu PATH — el
+> reporte lo usa (`claude mcp list`) para leer cuántos servidores MCP tenés
+> DISPONIBLES y compararlo contra lo que llegó al cable en `tools_by_server`. Esa
+> resta se imprime en un bloque propio debajo de la tabla, y sólo dice el HECHO, sin
+> elegir una causa:
+>
+> - Si tenés MÁS servidores disponibles de los que llegaron, el reporte te dice
+>   cuáles faltan y se detiene ahí: puede ser que tu harness los esté reteniendo, o
+>   que todavía no hayan terminado de conectar — las dos son causas reales y una
+>   sola petición no alcanza para distinguirlas.
+> - Si coinciden, lo dice y no agrega nada más.
+> - Si no se pudo leer tu configuración disponible (por ejemplo, `claude` no está en
+>   el PATH desde donde corrés el reporte), lo dice explícitamente en vez de
+>   adivinar — y nunca lo muestra igual que "0 servidores disponibles".
+> - Si dos nombres de servidor DISTINTOS que tenés configurados colapsan al mismo
+>   nombre en el cable (Claude Code reemplaza todo carácter fuera de
+>   `[A-Za-z0-9_]` por `_`; `"foo bar"` y `"foo_bar"` sanitizan ambos a
+>   `"foo_bar"`), el reporte no puede saber cuál de los dos llegó — lo dice y
+>   saca ese par del conteo, en vez de fusionarlos en silencio.
+> - Si la tabla trae una fila `(others)` (más de 32 servidores MCP distintos en la
+>   misma petición: OxideGate solo trackea 32 de forma individual), un servidor
+>   "sin fila propia" puede estar ahí adentro, sin nombre — el reporte lo dice en
+>   vez de afirmar que no llegó.
+>
+> Además, en tráfico `anthropic` el reporte siempre agrega un aviso corto: algunos
+> harnesses difieren esquemas MCP por defecto, pero ese diferido se cae a carga
+> completa detrás de un `ANTHROPIC_BASE_URL` no-first-party — y OxideGate es
+> exactamente eso. Te dice cómo comprobarlo vos mismo (repetir la petición sin el
+> proxy), sin decidirlo por vos.
+>
+> **Ojo con una confusión distinta:** que Claude Code marque algún tool con
+> `defer_loading` (columna nueva `tokens de contexto` al final del reporte) **no**
+> abarata esa fila en bytes — el esquema sigue viajando entero en el body igual.
+> Diferido ahorra contexto del modelo, no tráfico de red; `¿SE PUEDE QUITAR?` nunca
+> lo consulta.
 
 ### Paso 1 — Ubicarte en la carpeta del proyecto
 
@@ -94,8 +134,10 @@ En la terminal, entra en la carpeta de `oxidegate-lens` (donde está este repo).
 OXIDEGATE_PORT=8899 node bin/oxidegate-savings.mjs
 ```
 
-Eso es todo. Vas a ver una tabla con cada servidor MCP, cuántos bytes pesa, y
-cuánto ahorrarías desconectándolo.
+Eso es todo. Vas a ver una tabla con cada servidor MCP y cuántos bytes pesa (siempre
+desconectable, en bytes, si aparece en la tabla), un bloque aparte que compara
+cuántos tenés disponibles contra cuántos llegaron a esta petición puntual, y un
+aviso sobre el efecto del proxy en harnesses que difieren nativamente (ver arriba).
 
 > **Truco opcional para no escribir la ruta larga cada vez:** una sola vez, ejecuta
 > `npm link` dentro de la carpeta. Después puedes llamar a `oxidegate-savings` desde
