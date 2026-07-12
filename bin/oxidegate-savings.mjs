@@ -154,7 +154,22 @@ async function getJson(baseUrl, path) {
   const res = await fetch(`${baseUrl}${path}`, {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`GET ${path} returned ${res.status}`);
+  if (!res.ok) throw new Error(`GET ${path} devolvió ${res.status}`);
+
+  // El puerto por defecto (8080) es de los más disputados que hay: si el
+  // usuario tiene CUALQUIER otro servicio web ahí, `fetch` va a traer HTML y
+  // `res.json()` va a reventar con "Unexpected token '<'" — un mensaje que no
+  // le dice a nadie qué hacer. Comprobamos el content-type ANTES de parsear,
+  // para poder nombrar la causa real en vez de escupir un error de sintaxis.
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('json')) {
+    throw new Error(
+      `${baseUrl} responde, pero no es OxideGate: ${path} devolvió ` +
+        `"${contentType || 'sin content-type'}" en vez de JSON.\n` +
+        `Seguramente tenés otro servicio en ese puerto. Comprobá el puerto real ` +
+        `del proxy y pasalo en OXIDEGATE_PORT (o la URL completa en OXIDEGATE_LENS_URL).`,
+    );
+  }
   return res.json();
 }
 

@@ -16,6 +16,7 @@
 // (own PATH, never the host's) — see test/helpers/*.mjs for why.
 
 import { test } from 'node:test';
+import { createServer } from 'node:http';
 import assert from 'node:assert/strict';
 import { startMockOxideGate } from './helpers/mock-oxidegate-server.mjs';
 import { makeFakeClaude } from './helpers/fake-claude.mjs';
@@ -513,4 +514,26 @@ test('camino eager (upstream != anthropic): el ahorro se imprime SIN lenguaje de
   assert.ok(!stdout.includes('servidor(es) MCP disponibles'));
   assert.ok(!stdout.includes('tokens de contexto'));
   assertNoDeadCausalArtifacts(assert, stdout);
+});
+
+test('puerto ocupado por otro servicio -> "no es OxideGate", no un error de parseo JSON', async () => {
+  // El 8080 es un puerto disputadísimo. Un usuario con cualquier otro servicio
+  // web ahí recibía "Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON":
+  // un error de sintaxis que no nombra la causa ni dice qué hacer.
+  const intruso = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=UTF-8' });
+    res.end('<!DOCTYPE html><html><body>no soy OxideGate</body></html>');
+  });
+  await new Promise((r) => intruso.listen(0, '127.0.0.1', r));
+  const port = intruso.address().port;
+
+  try {
+    const { stderr, code } = await runSavingsCli({ baseUrl: `http://127.0.0.1:${port}` });
+    assert.equal(code, 1, 'debe salir con error');
+    assert.match(stderr, /no es OxideGate/, 'debe nombrar la causa real');
+    assert.match(stderr, /OXIDEGATE_PORT/, 'debe decirle al usuario qué hacer');
+    assert.doesNotMatch(stderr, /Unexpected token/, 'nunca un error de parseo crudo');
+  } finally {
+    intruso.close();
+  }
 });
