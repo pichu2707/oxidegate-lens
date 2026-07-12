@@ -9,20 +9,46 @@ muestra los hechos que sí puede medir, por separado, sin mezclarlos.
 
 ---
 
+## Instalación
+
+```sh
+brew install pichu2707/tap/oxidegate-lens
+```
+
+Instala dos comandos: **`oxidegate-savings`** (el reporte) y **`oxidegate-status`**
+(una línea, para una barra de estado). Cero dependencias: solo necesita Node.
+
+Y necesita a [OxideGate](https://github.com/pichu2707/OxideGate) corriendo, que es
+quien mide:
+
+```sh
+brew install pichu2707/tap/oxidegate
+```
+
+---
+
 ## Empieza aquí
 
 Un solo camino, cuatro pasos:
 
 |       | Paso                                       | Comando / acción                                       |
 | ----- | ------------------------------------------ | ------------------------------------------------------ |
-| **1** | Enciende OxideGate (desde su repo)         | `OXIDEGATE_PORT=8899 cargo run --bin oxidegate`        |
-| **2** | Confirma que responde                      | `curl http://127.0.0.1:8899/stats` debe devolver datos |
-| **3** | Ejecuta el reporte de ahorro               | `OXIDEGATE_PORT=8899 node bin/oxidegate-savings.mjs`   |
+| **1** | Enciende OxideGate                         | `OXIDEGATE_PORT=8899 oxidegate`                        |
+| **2** | Apunta tu agente al proxy                  | `export ANTHROPIC_BASE_URL=http://127.0.0.1:8899`      |
+| **3** | Úsalo un rato, y luego pide el reporte     | `OXIDEGATE_PORT=8899 oxidegate-savings`                |
 | **4** | Lee la tabla                               | ↓ es exactamente lo que vas a ver                      |
 
+> **`ANTHROPIC_BASE_URL` va SIN `/v1`.** El cliente añade la ruta él mismo. Si le
+> pones el `/v1`, la petición sale a `/v1/v1/messages` y el proxy responde **404**.
+
 > **No uses el puerto por defecto (8080)**: lo suelen tener ocupado Apache, Tomcat
-> y compañía. Si el 8080 está cogido, OxideGate no arranca. Fija otro con
-> `OXIDEGATE_PORT` — aquí usamos 8899 — y usa **ese mismo número** en todos los pasos.
+> y compañía. Fija otro con `OXIDEGATE_PORT` — aquí usamos 8899 — y usa **ese
+> mismo número** en todos los pasos. Si apuntas a un puerto donde vive otro
+> servicio, el reporte te lo dice: *«responde, pero no es OxideGate»*.
+
+> **El paso 3 no es opcional.** OxideGate solo puede medir lo que ha visto pasar.
+> Si pides el reporte sin haber hecho ninguna petición a través del proxy, la
+> tabla sale vacía — y eso no es un fallo, es que no hay nada que medir todavía.
 
 El reporte imprime **tres bloques independientes, nunca mezclados en un solo
 veredicto**, más un aviso:
