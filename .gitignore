@@ -1,3 +1,6 @@
 node_modules
 .DS_Store
 *.log
+
+# Metadata del tooling de agentes (hash + fecha; se regenera sola)
+.atl/
