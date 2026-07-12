@@ -15,8 +15,8 @@ muestra los hechos que sí puede medir, por separado, sin mezclarlos.
 brew install pichu2707/tap/oxidegate-lens
 ```
 
-Instala dos comandos: **`oxidegate-savings`** (el reporte) y **`oxidegate-status`**
-(una línea, para una barra de estado). Cero dependencias: solo necesita Node.
+Instala un comando: **`oxidegate-savings`** (el reporte). Cero dependencias:
+solo necesita Node.
 
 Y necesita a [OxideGate](https://github.com/pichu2707/OxideGate) corriendo, que es
 quien mide:
@@ -350,13 +350,10 @@ que nadie se entere hasta la próxima revisión adversarial, si la hay.
 
 ## Superficies avanzadas (experimentales)
 
-El reporte de ahorro de arriba es el camino principal y está verificado. Estas
-otras dos superficies existen, pero son secundarias — instalarlas y su
-paso a paso están en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
+El reporte de ahorro de arriba es el camino principal y está verificado. Esta
+otra superficie existe, pero es secundaria — instalarla y su paso a paso están
+en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
 
-- **Status line de Claude Code** (`bin/oxidegate-status.mjs`): imprime una línea
-  de resumen por-petición (`model  tax  tools  ttft  costo`). El mecanismo está
-  verificado, pero es una vista secundaria, no el ahorro por MCP.
 - **Plugin de OpenCode** (`opencode/oxidegate-lens.ts`): **experimental y no
   probado** contra un OpenCode real. El hook usado (`tool.execute.after`) no fue
   verificado. Además, por sí solo no enruta nada: hace falta un bloque `provider`
@@ -400,7 +397,6 @@ y el doc en sync es trabajo de quien los edita, no algo automático.
   distingue (todos los disponibles llegaron, algunos faltan, configuración
   ilegible, dialecto sin primitivo de diferido), generados con peticiones reales
   vía `curl` contra `/v1/messages` y `/v1/chat/completions`.
-- El mecanismo de la status line de Claude Code (`https://code.claude.com/docs/en/statusline`).
 - El formato de línea de `claude mcp list` (`lib/mcp-config.mjs`), probado en vivo
   contra Claude Code `2.1.207` — incluidos nombres con espacios (`claude.ai Gmail`) y con
   `:` (`plugin:engram:engram`), y la transformación a `mcp__<server>__<tool>` que hace el

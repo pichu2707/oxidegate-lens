@@ -116,8 +116,8 @@ import { readDeclaredMcpServers, sanitizeServerName } from '../lib/mcp-config.mj
 
 const DEFAULT_PORT = 8080;
 
-// This is an interactive CLI, not a status line. A human waiting two seconds
-// for a localhost round trip is fine; a human staring at a blank terminal
+// This is an interactive command a human runs on purpose, so it can afford to
+// wait. Two seconds for a localhost round trip is fine; a blank terminal
 // because we gave up after 300ms is not.
 const FETCH_TIMEOUT_MS = 2000;
 

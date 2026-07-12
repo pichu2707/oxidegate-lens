@@ -1,7 +1,7 @@
 {
   "name": "oxidegate-lens",
   "version": "0.2.2",
-  "description": "Read-only presentation layer for OxideGate: shows how many bytes each MCP server costs on every request, plus a Claude Code status line and an experimental OpenCode plugin. It reads the proxy's HTTP endpoints; it never measures anything itself.",
+  "description": "Read-only presentation layer for OxideGate: shows how many bytes each MCP server costs on every request. Targets eager harnesses (OpenCode and similar), where those bytes are sent whether the proxy is there or not. It reads the proxy's HTTP endpoints; it never measures anything itself.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -11,7 +11,6 @@
     "test": "node --test test/*.test.mjs"
   },
   "bin": {
-    "oxidegate-status": "bin/oxidegate-status.mjs",
     "oxidegate-savings": "bin/oxidegate-savings.mjs"
   },
   "files": [

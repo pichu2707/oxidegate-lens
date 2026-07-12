@@ -160,46 +160,7 @@ Revisa, en este orden (el 90% está en los dos primeros):
 
 ---
 
-# Parte B — Status line de Claude Code (avanzado)
-
-Muestra una línea de resumen por-petición en la barra de estado de Claude Code
-(`model  tax  tools  ttft  costo`). **No** es el reporte de ahorro: es otra vista.
-
-### Paso 1 — Editar la configuración de Claude Code
-
-El archivo está en `~/.claude/settings.json`. Haz una copia primero:
-
-```sh
-cp ~/.claude/settings.json ~/.claude/settings.json.bak
-```
-
-Añade este bloque (pon la **ruta absoluta real** al script dentro de tu copia
-del proyecto):
-
-```json
-"statusLine": {
-  "type": "command",
-  "command": "/home/TU_USUARIO/oxidegate-lens/bin/oxidegate-status.mjs",
-  "padding": 2,
-  "refreshInterval": 5
-}
-```
-
-### Paso 2 — Reiniciar Claude Code
-
-Ciérralo y ábrelo. En la barra de estado deberías ver algo como:
-
-```
-oxidegate  claude-opus-4-8  tax 89.5%  tools 159.1 kB  ttft 3.0s  $0.2464
-```
-
-Igual que siempre: la status line solo **muestra**. Para que haya datos, el
-tráfico de Claude tiene que pasar por OxideGate (eso se configura del lado de
-**OxideGate**, no aquí).
-
----
-
-# Parte C — Plugin de OpenCode (EXPERIMENTAL)
+# Parte B — Plugin de OpenCode (EXPERIMENTAL)
 
 > ⚠️ **Aviso honesto:** este plugin **nunca se probó** contra un OpenCode real.
 > El hook que usa (`tool.execute.after`) no está verificado. Puede no funcionar
@@ -277,10 +238,7 @@ porque instala solo el paquete del proveedor.
 **Reporte de ahorro (Parte A):** nada que desinstalar; es solo un comando. Si
 hiciste `npm link`, ejecuta `npm unlink -g oxidegate-lens`.
 
-**Status line (Parte B):** borra el bloque `statusLine` de
-`~/.claude/settings.json`, o restaura tu copia `.bak`.
-
-**Plugin OpenCode (Parte C):** borra el bloque `provider.oxidegate` y la línea
+**Plugin OpenCode (Parte B):** borra el bloque `provider.oxidegate` y la línea
 del plugin en `opencode.json`, y borra
 `~/.config/opencode/plugins/oxidegate-lens.ts`. O restaura tu copia `.bak`.
 
