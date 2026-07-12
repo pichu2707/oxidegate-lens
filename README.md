@@ -57,7 +57,7 @@ veredicto**, más un aviso:
    sus bytes viajaron, punto. `sí, desconectándolo` sin excepción, sin importar
    `deferred_tools` ni quién dice ser el cliente.
 2. **Disponibles vs. llegados** — una resta, sin causa. Cuántos servidores MCP
-   tenés disponibles (`claude mcp list`, en tu propia máquina) contra cuántos
+   tienes disponibles (`claude mcp list`, en tu propia máquina) contra cuántos
    llegaron al cable en esta petición. Si faltan, los nombra y ahí se detiene:
    no elige entre "tu harness los retiene" y "todavía no conectaron" — las dos
    son causas reales y una sola petición no alcanza para distinguirlas.
@@ -81,7 +81,7 @@ overhead (corchetes/comas)    -            -         7 B         -
 
 ahorro por petición desconectando los 4 servidores MCP: 474 B (74.2% de los tools)
 
-Tenés 4 servidor(es) MCP disponibles. En esta petición llegaron los 4.
+Tienes 4 servidor(es) MCP disponibles. En esta petición llegaron los 4.
 
 tokens de contexto (otra moneda — NO bytes, no cambia nada de la tabla de arriba):
   - claude_ai_Google_Drive: ocupa el contexto completo por adelantado (0 tools diferidas)
@@ -93,8 +93,8 @@ aviso: algunos harnesses (p. ej. Claude Code) difieren esquemas MCP por defecto,
 diferido se cae a carga completa detrás de un ANTHROPIC_BASE_URL que no sea de Anthropic —
 y OxideGate es exactamente eso. Si tu harness es de ese tipo, una parte de los bytes de
 la tabla de arriba podría ser un artefacto de tener el proxy en el medio, no un costo que
-exista sin él. Esta corrida no lo puede decidir por vos: para comprobarlo, repetí la misma
-petición apuntando directo a Anthropic (sin pasar por OxideGate) y compará los bytes.
+exista sin él. Esta ejecución no lo puede decidir por ti: para comprobarlo, repite la misma
+petición apuntando directo a Anthropic (sin pasar por OxideGate) y compara los bytes.
 Detalle medido: docs/optimizer-tool-search.md §3 en el repo de OxideGate.
 ```
 
@@ -109,7 +109,7 @@ overhead (corchetes/comas)    -            -         4 B         -
 
 ahorro por petición desconectando el servidor MCP: 91 B (36.0% de los tools)
 
-Tenés 4 servidores MCP disponibles. En esta petición llegaron 1.
+Tienes 4 servidores MCP disponibles. En esta petición llegaron 1.
 Los otros 3 (claude_ai_Google_Drive, claude_ai_Google_Calendar, plugin_engram_engram) no viajan ahora mismo.
 Puede ser que tu harness los esté reteniendo, o que todavía no hayan conectado —
 ninguna de las dos causas se puede confirmar desde esta sola petición (medido:
@@ -142,7 +142,7 @@ ahorro por petición desconectando el servidor MCP: 120 B (51.3% de los tools)
 ya re-enviados en 1 petición observada: 120 B
 Este dialecto (openai) no tiene primitivo de diferido: no existe una versión
 donde estos bytes sean opcionales, para ningún harness. El costo de arriba es real,
-sin ambigüedad — nada que decidir acá.
+sin ambigüedad — nada que decidir aquí.
 ```
 
 > **Si la tabla sale vacía**, es por una de tres razones, en este orden:
@@ -186,8 +186,8 @@ arriba — nunca decide nada.
 
 ### Qué significa el bloque "disponibles vs. llegados"
 
-Debajo de la tabla, cada corrida de tráfico `anthropic` compara los servidores MCP
-que tenés **disponibles** (`claude mcp list`, vía `lib/mcp-config.mjs`, corrido en tu
+Debajo de la tabla, cada ejecución de tráfico `anthropic` compara los servidores MCP
+que tienes **disponibles** (`claude mcp list`, vía `lib/mcp-config.mjs`, corrido en tu
 propia máquina) contra los que **llegaron** al cable (`tools_by_server`) para la
 petición de la tabla de arriba. Es una resta, no una conclusión:
 
@@ -234,7 +234,7 @@ harnesses (Claude Code, documentado) difieren esquemas MCP por defecto, pero ese
 diferido se cae a carga completa detrás de un `ANTHROPIC_BASE_URL` que no sea de
 Anthropic — y OxideGate es exactamente eso. Puede que una parte de los bytes de
 la tabla sea un artefacto de tener el proxy en el medio. El reporte no lo decide
-por vos — te dice cómo comprobarlo (repetir la petición sin el proxy y comparar).
+por ti — te dice cómo comprobarlo (repetir la petición sin el proxy y comparar).
 No es una columna hedgeada ni depende de reconocer el cliente: se imprime igual
 para cualquier petición `anthropic`, precisamente porque el `client` no es
 verificable y no debe decidir nada.
@@ -303,7 +303,7 @@ Esa degradación no es una promesa: está **cubierta por tests** (`test/oxidegat
 defectos 5 y 6). Si alguien la rompe, la suite se pone roja.
 - **Node 24 o superior** (usa `fetch` y `AbortSignal.timeout` globales, sin
   dependencias externas).
-- **El comando `claude` en el PATH**, sólo si querés el bloque "disponibles vs.
+- **El comando `claude` en el PATH**, sólo si quieres el bloque "disponibles vs.
   llegados" en tráfico `anthropic` (`lib/mcp-config.mjs` corre `claude mcp list`).
   Sin él, el reporte sigue funcionando: ese bloque dice que no pudo leer tu
   configuración y muestra sólo lo que ve directamente en el cable — nunca lo
@@ -338,7 +338,7 @@ esos invariantes y nada se lo va a decir — salvo esta suite.
 `test/oxidegate-savings.test.mjs` convierte cada uno de los nueve defectos en
 un test que falla si vuelve a aparecer: no es cobertura por cobertura, es
 **protección de regresión para una lista específica, conocida y cara de
-bugs.** Si en algún momento pensás en borrar uno de esos tests porque "ya no
+bugs.** Si en algún momento piensas en borrar uno de esos tests porque "ya no
 hace falta" o "molesta" — no lo hace falta, y sí molesta: es la puerta que le
 costó una ronda de revisión completa cerrar. Borrarlo la vuelve a abrir sin
 que nadie se entere hasta la próxima revisión adversarial, si la hay.

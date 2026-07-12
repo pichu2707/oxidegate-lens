@@ -117,7 +117,7 @@ Por eso la columna que importa no es «¿acepta base_url?» sino **«¿medible e
    `oxidegate-lens` ya no intenta adivinar la causa desde el cable (User-Agent, o el
    campo `client_defer_loading` que este mismo A/B midió en `false` en los DOS brazos y
    que por eso se eliminó de OxideGate). En su lugar compara cuántos servidores MCP
-   tenés **disponibles** (`claude mcp list`, leído en la propia máquina) contra cuántos
+   tienes **disponibles** (`claude mcp list`, leído en la propia máquina) contra cuántos
    **llegaron** al cable (`tools_by_server`) — ver `lib/mcp-config.mjs` y el bloque
    "disponibles vs. llegados" en `bin/oxidegate-savings.mjs` — y se detiene en la
    resta: no elige entre "tu harness los retiene" y "todavía no conectaron", porque las

@@ -89,20 +89,20 @@ Esto es lo que responde "¿cuánto peso me ahorro desconectando cada servidor MC
 dentro de ningún editor.
 
 > **Importante si usás Claude Code:** necesita el comando `claude` en tu PATH — el
-> reporte lo usa (`claude mcp list`) para leer cuántos servidores MCP tenés
+> reporte lo usa (`claude mcp list`) para leer cuántos servidores MCP tienes
 > DISPONIBLES y compararlo contra lo que llegó al cable en `tools_by_server`. Esa
 > resta se imprime en un bloque propio debajo de la tabla, y sólo dice el HECHO, sin
 > elegir una causa:
 >
-> - Si tenés MÁS servidores disponibles de los que llegaron, el reporte te dice
+> - Si tienes MÁS servidores disponibles de los que llegaron, el reporte te dice
 >   cuáles faltan y se detiene ahí: puede ser que tu harness los esté reteniendo, o
 >   que todavía no hayan terminado de conectar — las dos son causas reales y una
 >   sola petición no alcanza para distinguirlas.
 > - Si coinciden, lo dice y no agrega nada más.
 > - Si no se pudo leer tu configuración disponible (por ejemplo, `claude` no está en
->   el PATH desde donde corrés el reporte), lo dice explícitamente en vez de
+>   el PATH desde donde corres el reporte), lo dice explícitamente en vez de
 >   adivinar — y nunca lo muestra igual que "0 servidores disponibles".
-> - Si dos nombres de servidor DISTINTOS que tenés configurados colapsan al mismo
+> - Si dos nombres de servidor DISTINTOS que tienes configurados colapsan al mismo
 >   nombre en el cable (Claude Code reemplaza todo carácter fuera de
 >   `[A-Za-z0-9_]` por `_`; `"foo bar"` y `"foo_bar"` sanitizan ambos a
 >   `"foo_bar"`), el reporte no puede saber cuál de los dos llegó — lo dice y
@@ -116,7 +116,7 @@ dentro de ningún editor.
 > harnesses difieren esquemas MCP por defecto, pero ese diferido se cae a carga
 > completa detrás de un `ANTHROPIC_BASE_URL` no-first-party — y OxideGate es
 > exactamente eso. Te dice cómo comprobarlo vos mismo (repetir la petición sin el
-> proxy), sin decidirlo por vos.
+> proxy), sin decidirlo por ti.
 >
 > **Ojo con una confusión distinta:** que Claude Code marque algún tool con
 > `defer_loading` (columna nueva `tokens de contexto` al final del reporte) **no**
@@ -136,7 +136,7 @@ OXIDEGATE_PORT=8899 node bin/oxidegate-savings.mjs
 
 Eso es todo. Vas a ver una tabla con cada servidor MCP y cuántos bytes pesa (siempre
 desconectable, en bytes, si aparece en la tabla), un bloque aparte que compara
-cuántos tenés disponibles contra cuántos llegaron a esta petición puntual, y un
+cuántos tienes disponibles contra cuántos llegaron a esta petición puntual, y un
 aviso sobre el efecto del proxy en harnesses que difieren nativamente (ver arriba).
 
 > **Truco opcional para no escribir la ruta larga cada vez:** una sola vez, ejecuta

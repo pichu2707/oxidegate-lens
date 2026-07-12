@@ -301,7 +301,7 @@ test('defecto 6: 0 servidores configurados de verdad -> "nada que restar", texto
   await claude.cleanup();
 
   assert.equal(code, 0);
-  assert.ok(stdout.includes('no tenés servidores MCP disponibles: nada que restar acá.'));
+  assert.ok(stdout.includes('no tienes servidores MCP disponibles: nada que restar aquí.'));
   // El cero genuino jamás usa el lenguaje de "no se pudo leer".
   assert.ok(!stdout.includes('no se pudo leer'));
   assert.ok(!stdout.includes('DISTINTO de "0 servidores disponibles"'));
@@ -340,7 +340,7 @@ test('defecto 7: colisión de 2 nombres ("foo bar" / "foo_bar") se reporta como 
   assert.ok(stdout.includes('sanitizan al mismo nombre en el cable ("foo_bar")'));
   // Sólo "baz" es contable con certeza: los ambiguos quedan afuera de ambos
   // conteos (disponibles y faltantes) — nunca "2 disponibles" ni fusionados.
-  assert.ok(stdout.includes('Tenés 1 servidor(es) MCP disponibles (sin contar los ambiguos de arriba)'));
+  assert.ok(stdout.includes('Tienes 1 servidor(es) MCP disponibles (sin contar los ambiguos de arriba)'));
 });
 
 test('defecto 7: colisión de 3 nombres se reporta con los TRES nombres, nunca se pierde ninguno', async () => {
@@ -366,7 +366,7 @@ test('defecto 7: colisión de 3 nombres se reporta con los TRES nombres, nunca s
 
   assert.equal(code, 0);
   assert.ok(stdout.includes('no se puede saber si llegaron "foo bar" y "foo_bar" y "foo!bar"'));
-  assert.ok(stdout.includes('Tenés 1 servidor(es) MCP disponibles (sin contar los ambiguos de arriba)'));
+  assert.ok(stdout.includes('Tienes 1 servidor(es) MCP disponibles (sin contar los ambiguos de arriba)'));
 });
 
 // =======================================================================
@@ -504,7 +504,7 @@ test('camino eager (upstream != anthropic): el ahorro se imprime SIN lenguaje de
     stdout.includes(
       'Este dialecto (openai) no tiene primitivo de diferido: no existe una versión\n' +
         'donde estos bytes sean opcionales, para ningún harness. El costo de arriba es real,\n' +
-        'sin ambigüedad — nada que decidir acá.',
+        'sin ambigüedad — nada que decidir aquí.',
     ),
   );
   for (const hedge of ['no se puede confirmar', 'puede ser que', 'tal vez', 'quizás', 'aviso: algunos harnesses']) {

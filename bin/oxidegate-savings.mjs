@@ -166,8 +166,8 @@ async function getJson(baseUrl, path) {
     throw new Error(
       `${baseUrl} responde, pero no es OxideGate: ${path} devolvió ` +
         `"${contentType || 'sin content-type'}" en vez de JSON.\n` +
-        `Seguramente tenés otro servicio en ese puerto. Comprobá el puerto real ` +
-        `del proxy y pasalo en OXIDEGATE_PORT (o la URL completa en OXIDEGATE_LENS_URL).`,
+        `Seguramente tienes otro servicio en ese puerto. Comprueba el puerto real ` +
+        `del proxy y pásalo en OXIDEGATE_PORT (o la URL completa en OXIDEGATE_LENS_URL).`,
     );
   }
   return res.json();
@@ -369,7 +369,7 @@ async function main() {
       process.stdout.write(
         `Este dialecto (${entry.upstream}) no tiene primitivo de diferido: no existe una versión\n` +
           'donde estos bytes sean opcionales, para ningún harness. El costo de arriba es real,\n' +
-          'sin ambigüedad — nada que decidir acá.\n',
+          'sin ambigüedad — nada que decidir aquí.\n',
       );
     }
   }
@@ -388,7 +388,7 @@ async function main() {
         unparseable: 'la salida de `claude mcp list` no tuvo el formato esperado',
       }[declared.reason ?? ''] ?? 'razón desconocida';
       process.stdout.write(
-        `no se pudo leer cuántos servidores MCP tenés disponibles (${reasonText}):\n` +
+        `no se pudo leer cuántos servidores MCP tienes disponibles (${reasonText}):\n` +
           'no hay forma de comparar disponible contra llegado para esta petición. Esto es\n' +
           'DISTINTO de "0 servidores disponibles" — no es un cero, es un dato que no se pudo leer.\n',
       );
@@ -411,11 +411,11 @@ async function main() {
 
       if (cmp.available === 0) {
         if (cmp.collisions.length === 0) {
-          process.stdout.write('no tenés servidores MCP disponibles: nada que restar acá.\n');
+          process.stdout.write('no tienes servidores MCP disponibles: nada que restar aquí.\n');
         }
       } else if (cmp.missing.length === 0) {
         process.stdout.write(
-          `Tenés ${cmp.available} servidor(es) MCP disponibles${suffix}. En esta petición llegaron los ${cmp.available}.\n`,
+          `Tienes ${cmp.available} servidor(es) MCP disponibles${suffix}. En esta petición llegaron los ${cmp.available}.\n`,
         );
       } else if (cmp.hasOthersBucket) {
         // The overflow bucket makes "missing" structurally unconfirmable:
@@ -425,7 +425,7 @@ async function main() {
         // A sanitized name absent from the individual rows may still be
         // sitting, unnamed, inside that bucket.
         process.stdout.write(
-          `Tenés ${cmp.available} servidor(es) MCP disponibles${suffix}. ${cmp.missing.length} de ellos\n` +
+          `Tienes ${cmp.available} servidor(es) MCP disponibles${suffix}. ${cmp.missing.length} de ellos\n` +
             `(${bucketNames(cmp.missing)}) no tienen fila propia en la tabla — pero esta petición trae\n` +
             'una fila "(others)": OxideGate sólo trackea servidores individualmente hasta un tope\n' +
             '(ver la tabla arriba), y el resto se cuenta pero se funde en ese bucket sin nombre. No\n' +
@@ -435,7 +435,7 @@ async function main() {
       } else {
         const arrived = cmp.available - cmp.missing.length;
         process.stdout.write(
-          `Tenés ${cmp.available} servidor(es) MCP disponibles${suffix}. En esta petición llegaron ${arrived}.\n` +
+          `Tienes ${cmp.available} servidor(es) MCP disponibles${suffix}. En esta petición llegaron ${arrived}.\n` +
             `Los otros ${cmp.missing.length} (${bucketNames(cmp.missing)}) no viajan ahora mismo.\n` +
             'Puede ser que tu harness los esté reteniendo, o que todavía no hayan conectado —\n' +
             'ninguna de las dos causas se puede confirmar desde esta sola petición (medido:\n' +
@@ -477,8 +477,8 @@ async function main() {
         'diferido se cae a carga completa detrás de un ANTHROPIC_BASE_URL que no sea de Anthropic —\n' +
         'y OxideGate es exactamente eso. Si tu harness es de ese tipo, una parte de los bytes de\n' +
         'la tabla de arriba podría ser un artefacto de tener el proxy en el medio, no un costo que\n' +
-        'exista sin él. Esta corrida no lo puede decidir por vos: para comprobarlo, repetí la misma\n' +
-        'petición apuntando directo a Anthropic (sin pasar por OxideGate) y compará los bytes.\n' +
+        'exista sin él. Esta ejecución no lo puede decidir por ti: para comprobarlo, repite la misma\n' +
+        'petición apuntando directo a Anthropic (sin pasar por OxideGate) y compara los bytes.\n' +
         'Detalle medido: docs/optimizer-tool-search.md §3 en el repo de OxideGate.\n',
     );
   }
