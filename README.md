@@ -275,6 +275,43 @@ Ignorarlas lleva a conclusiones falsas:
 
 ---
 
+## Tests
+
+```
+npm test
+```
+
+Corre la suite completa (`node --test`, sin dependencias nuevas) en menos de
+dos segundos. Es **hermética**: levanta un servidor `node:http` propio en un
+puerto efímero para simular a OxideGate y un `claude` falso en un PATH propio
+para simular `claude mcp list` — nunca toca un proxy real ni el `claude` real
+de esta máquina. Ver `test/helpers/` para cómo.
+
+### Por qué existe esta suite
+
+Este reporte pasó por **nueve rondas de revisión adversarial. Se encontraron
+nueve defectos. Los nueve los encontró una persona o un agente leyendo y
+midiendo la salida a mano — ninguno lo encontró una máquina, porque hasta
+ahora no había ninguna.**
+
+Los invariantes que sobrevivieron están escritos en **comentarios de código**
+(ver el header de `bin/oxidegate-savings.mjs`). Un comentario no detiene a
+nadie. La próxima persona que toque ese archivo puede romper cualquiera de
+esos invariantes y nada se lo va a decir — salvo esta suite.
+
+`test/oxidegate-savings.test.mjs` convierte cada uno de los nueve defectos en
+un test que falla si vuelve a aparecer: no es cobertura por cobertura, es
+**protección de regresión para una lista específica, conocida y cara de
+bugs.** Si en algún momento pensás en borrar uno de esos tests porque "ya no
+hace falta" o "molesta" — no lo hace falta, y sí molesta: es la puerta que le
+costó una ronda de revisión completa cerrar. Borrarlo la vuelve a abrir sin
+que nadie se entere hasta la próxima revisión adversarial, si la hay.
+
+`test/mcp-config.test.mjs` cubre en unidad la FAILURE POLICY de
+`lib/mcp-config.mjs` (ausente ≠ cero) que sostiene los defectos #6 y #7.
+
+---
+
 ## Superficies avanzadas (experimentales)
 
 El reporte de ahorro de arriba es el camino principal y está verificado. Estas

@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=24"
   },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "bin": {
     "oxidegate-status": "bin/oxidegate-status.mjs",
     "oxidegate-savings": "bin/oxidegate-savings.mjs"
