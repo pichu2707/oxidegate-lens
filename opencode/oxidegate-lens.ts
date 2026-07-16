@@ -42,6 +42,7 @@ const FETCH_TIMEOUT_MS = 300;
 
 const MCP_DISABLE_BY_DEFAULT_ENV = 'OXIDEGATE_MCP_DISABLE_BY_DEFAULT';
 const MCP_ALLOWLIST_ENV = 'OXIDEGATE_MCP_ALLOWLIST';
+const DEBUG_ENV = 'OXIDEGATE_LENS_DEBUG';
 
 function resolveBaseUrl(): string {
   if (process.env.OXIDEGATE_LENS_URL) return process.env.OXIDEGATE_LENS_URL;
@@ -111,9 +112,45 @@ function envFlagEnabled(name: string): boolean {
   return value === '1' || value === 'true' || value === 'yes' || value === 'on';
 }
 
+function debugLog(message: string): void {
+  if (!envFlagEnabled(DEBUG_ENV)) return;
+  console.log(message);
+}
+
 function mcpServerNames(status: unknown): string[] {
   if (!status || typeof status !== 'object' || Array.isArray(status)) return [];
   return Object.keys(status);
+}
+
+function summarizeMcpStatus(status: unknown): string {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return 'MCP actual: unknown';
+
+  const rows = Object.entries(status as Record<string, any>)
+    .map(([name, value]) => `${name}=${value?.status ?? 'unknown'}`)
+    .sort();
+
+  return `MCP actual (SDK): ${rows.join(', ') || 'none'}`;
+}
+
+async function showMcpStatusToast(client: any, directory: string | undefined, status: unknown): Promise<void> {
+  const showToast = client?.tui?.showToast;
+  if (typeof showToast !== 'function') return;
+
+  try {
+    await showToast({
+      body: {
+        title: 'OxideGate MCP actual',
+        message: summarizeMcpStatus(status).replace(/^MCP actual \(SDK\): /, ''),
+        variant: 'info',
+        duration: 5000,
+      },
+      query: directory ? { directory } : undefined,
+    });
+  } catch {
+    // Toast support is best-effort: older OpenCode builds or non-TUI clients
+    // may not expose it. The SDK status marker in tool output remains the
+    // durable source of truth.
+  }
 }
 
 function envList(name: string): Set<string> {
@@ -136,12 +173,12 @@ async function disableMcpServersByDefault(client: any, directory: string | undef
     const serversToDisable = servers.filter((server) => !allowlist.has(server));
     const preserved = servers.filter((server) => allowlist.has(server));
     if (servers.length === 0) {
-      console.log('[oxidegate-lens] MCP disabled-by-default enabled; no MCP servers found');
+      debugLog('[oxidegate-lens] MCP disabled-by-default enabled; no MCP servers found');
       return;
     }
 
     if (serversToDisable.length === 0) {
-      console.log(
+      debugLog(
         `[oxidegate-lens] MCP disabled-by-default enabled; disabled=- preserved=${preserved.join(', ') || '-'}`,
       );
       return;
@@ -164,13 +201,15 @@ async function disableMcpServersByDefault(client: any, directory: string | undef
       .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
       .map((r) => formatError(r.reason));
 
-    console.log(
+    debugLog(
       `[oxidegate-lens] MCP disabled-by-default enabled; disabled=${disabled.join(', ') || '-'} preserved=${
         preserved.join(', ') || '-'
       }${
         failed.length ? ` failed=${failed.join(' | ')}` : ''
       }`,
     );
+    const afterStatus = unwrapSdkResponse(await client.mcp.status({ query }));
+    await showMcpStatusToast(client, directory, afterStatus);
   } catch (error) {
     console.warn(`[oxidegate-lens] MCP disabled-by-default failed: ${formatError(error)}`);
   }
@@ -199,6 +238,7 @@ async function collectMcpValveSnapshot(
   const status = unwrapSdkResponse(await client.mcp.status({ query }));
   const snapshot: Record<string, unknown> = {
     mcp_status: status,
+    mcp_state_marker: summarizeMcpStatus(status),
     mcp_server_count: status && typeof status === 'object' ? Object.keys(status).length : null,
   };
 
@@ -290,7 +330,10 @@ export async function OxidegateLens({ project, client, $, directory, worktree }:
                     args.model,
                   );
                   const toolCount = snapshot.tool_count === null ? 'skipped' : snapshot.tool_count;
-                  console.log(`[oxidegate-lens] experimental MCP status snapshot; tools=${toolCount}`);
+                  console.log(
+                    `[oxidegate-lens] experimental MCP status snapshot; tools=${toolCount}; ${snapshot.mcp_state_marker}`,
+                  );
+                  await showMcpStatusToast(client, context.directory ?? directory, snapshot.mcp_status);
                   return valveResult({ ok: true, action: 'status', snapshot });
                 } catch (error) {
                   return valveResult({ ok: false, action: 'status', error: formatError(error) });
