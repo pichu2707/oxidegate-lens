@@ -145,18 +145,36 @@ These are thresholds, not truths. They are named constants with the reasoning
 above in their doc comments, so a future change argues with the reasoning rather
 than the number.
 
-### Decision 4: `ok: false` is price-UNKNOWN, never `bytes: 0`
+### Decision 4: `ok: false` is price-UNKNOWN, never `bytes: 0` — the `ok` flag is the guard
 
-**Choice.** `readMcpSavingsSnapshot` maps `mcpMeasurement[].ok === false` to
-`price: null`, discarding its `bytes` field entirely.
+**Choice (user ruling).** `readMcpSavingsSnapshot` tests the **`ok` flag**, not
+the presence of `.bytes`. `mcpMeasurement[].ok === false` maps to `price:
+{ status: 'unknown', reason: 'cannot-measure' }`, **discarding its `bytes`
+field entirely**. It renders as "cannot measure", never as `0`.
 
 **Justification.** `measure.ts` builds `bytes` as the sum of a tool list that is
 **empty** when the connect/list failed. The field is therefore *present, typed,
-`0`, and meaningless*. The spec's "REQUIRED: `.bytes`" rule is satisfied by the
+`0`, and meaningless*. The spec's "REQUIRED: `.bytes`" rule was satisfied by the
 letter and violated in spirit: rendering it would print "this server costs 0
-bytes" about a server whose cost is unknown — precisely the `null`-coerced-to-`0`
-lie the proposal forbids, arriving through the one door the field-presence check
-does not guard.
+bytes" about a server whose cost is unknown — precisely the coerced-to-`0` lie
+the proposal forbids, arriving through **the one door a field-presence check does
+not guard**. Presence is not measurement.
+
+**This is ONE invariant with the tokens rule, not two.** `tokenize.ts`'s HONESTY
+NOTE already establishes it for tokens (`null` = "no accurate tokenizer", never
+zero, never coerced). Bytes are the same door on the other side. Stated once,
+covering both:
+
+> **An absent measurement is never a zero measurement.**
+
+| Snapshot says | Price | Renders |
+|---|---|---|
+| `ok: false` | `unknown / cannot-measure` | "cannot measure" |
+| `tokens: null` | bytes only | headline degrades to bytes |
+| `ok: true`, `bytes: 0` | `known: 0` | a genuine zero — a server with no tools |
+
+The last row is why the flag matters and presence does not: `ok` is the **only**
+field that separates a real zero from an unmeasurable one.
 
 mcp-savings' own panel already draws this line
 (`panel.ts:88-91`: *"an errored server has no measured tokens to add… silently
@@ -171,7 +189,8 @@ the **union** of both sides. Match tiers, tried in order:
 |------|------|----------------|
 | 1 | `snapshot.server === wireLabel` | `join: 'exact'` |
 | 2 | `sanitizeServerName(snapshot.server) === wireLabel` | `join: 'sanitized'` |
-| 3 | no match either way | `join: 'snapshot-only'` or `'wire-only'` |
+| 3 | snapshot entry matched no wire label | `join: 'snapshot-only'` — priced, not observed |
+| 3 | **wire label matched no snapshot entry** | **`join: 'unknown'`** — observed spend, unattributed. Always rendered (Decision 6). |
 
 **Ambiguity guard.** `sanitizeServerName` is **not injective** (`"foo bar"` and
 `"foo_bar"` both → `"foo_bar"`). If two snapshot names collapse to one wire
@@ -232,12 +251,43 @@ is: no tools attributable to that name arrived in the window. No cause is
 attached — consistent with section (b) of `bin/oxidegate-savings.mjs`, which
 names the same subtraction and refuses to explain it.
 
-**Residual risk, stated.** A *partial* naming mismatch (some servers match, one
-does not, and that one is genuinely in use under a different label) survives
-this guard and would be labeled a disable candidate. It is mitigated, not
-eliminated, by three properties: the valve never acts, the window is always
-stated, and `enabled: false` servers — the overwhelming majority of unmatched
-rows in practice — take the branch below instead.
+**The `unknown` row — the user ruling that makes a partial mismatch VISIBLE.**
+`joinHealth` is a fleet-level guard: it fires only when the two instruments
+agree about *nothing*. A *partial* mismatch slips under it. The ruling closes
+that gap from the other side — not by attributing the spend, but by **refusing
+to hide it**:
+
+> **Wire spend that matches no snapshot server MUST still be shown**, as its own
+> row, labeled `join: 'unknown'` (unattributed). **NEVER dropped.**
+
+| Situation | Row emitted |
+|---|---|
+| wire spend, no matching snapshot server | `join: 'unknown'` — spend shown, unattributed. No recommendation. |
+| no observed spend, no price | **silence** — no row-level recommendation, no nag |
+| no observed spend, has a price | `candidate-to-disable` + its window |
+
+**Why this is the right shape.** A dropped row is the **worst available
+outcome**: it silently deletes evidence of real money spent, and it deletes
+exactly the evidence that would have revealed the join was broken. An `unknown`
+row carrying real spend is the **tell-tale**: a human reading "17.2 kB spent by
+`unknown`" next to a fleet of servers all reading "0 uses" can SEE that the two
+tools are not naming the same things. The design cannot resolve the ambiguity —
+there is no third field — so it hands the ambiguity to the human **in a form
+they can recognize**, rather than resolving it wrongly and quietly.
+
+This **complements `joinHealth`; it does not replace it.** `joinHealth` still
+suppresses fleet-wide recommendations under total non-correspondence. The
+`unknown` row is what survives when the failure is partial and the fleet guard
+stays silent. Two guards, two failure scales.
+
+**Residual risk, reduced but stated.** A partial naming mismatch where the
+mismatched server is genuinely in use under a different label would still label
+it a disable candidate — *but its spend now appears as an `unknown` row on the
+same surface*, which is precisely the contradiction a human notices. It is
+further mitigated by three properties: lens never changes policy on its own
+judgment, the window is always stated, and `enabled: false` servers — the
+overwhelming majority of unmatched rows in practice — take the branch below
+instead.
 
 ### Decision 7: the recommendation gate is a conjunction of named refusals
 
@@ -250,12 +300,24 @@ rows in practice — take the branch below instead.
 | `joinHealth !== 'no-correspondence'` | `'instruments-disagree'` |
 | no `(others)` bucket in the window | `'not-individually-confirmed'` |
 | `row.join !== 'ambiguous'` | `'name-collision'` |
+| `row.join !== 'unknown'` | *(unattributed spend — nothing to recommend against)* |
+| **`row.price.status === 'known'`** | **silence — no row-level output at all** |
 | the server is currently ON (`enabled !== false`) | `'already-off'` |
 | `uses === 0` across the window | *(no recommendation needed)* |
 
 Each refusal has a **name**, and each name renders as its own sentence. There is
 no `null` recommendation that renders as blank — "I am not recommending, and
 here is why" is a first-class output, not an absence.
+
+**The price gate is the one exception to that, deliberately (user ruling).** A
+server with no observed spend **and no price tag** produces **silence** — not a
+named refusal. There is nothing to say: lens knows of no cost and saw no use.
+Naming a refusal there would be a nag about a server it has no information
+about. Recommendation requires a price, because the rule is *cost with no
+return* — with no known cost, the premise is missing, not merely unproven. Note
+`price.status === 'known'` is exactly the `ok`-flag test from Decision 4:
+`ok: false` yields `unknown`, and so yields silence rather than a `0`-cost
+recommendation.
 
 **The `'already-off'` branch is the feature's headline.** A server with
 `enabled: false` in the snapshot is priced and legitimately absent from the wire
@@ -268,35 +330,53 @@ cannot know:
 That row is the number that does not exist on the wire, on the surface where the
 decision is made. It is the whole point of the change.
 
-### Decision 8: the honesty invariant is enforced by module topology
+### Decision 8: the valve is a TAP — module topology separates policy from opinion
 
-**Choice.** `lib/mcp-valve.mjs` has **no import path — direct or transitive — to
-any call site of `client.mcp.connect` / `client.mcp.disconnect`.** It imports
-`lib/mcp-snapshot.mjs`, `lib/mcp-usage.mjs`, and `sanitizeServerName`. It
-exports data. It receives no `client`.
+**The product model (user ruling — this corrects an earlier framing error).**
+The valve **is** an optimizer. It leaves the marked MCP servers (or all of them)
+closed at startup and lets them be opened on demand. It is a **tap**: the water
+is always there; the tap lets it through or cuts it off according to need.
 
-**Justification.** "Informs, never acts" is a property this design can either
-document and hope for, or make **structurally unreachable**. Recommendation data
-flows in exactly one direction: `lib/` → render. There is no wire from the
-recommendation to the SDK, so no future edit can accidentally connect one
-without visibly creating a new dependency edge and defeating the header comment
-that says why it must not exist.
+**Starting closed is NOT autonomous action. It is the user's declared policy,
+applied.** `disableMcpServersByDefault` (`oxidegate-lens.ts:165`, invoked at load,
+line 311) is a legitimate, intentional, shipped feature and **stays**. The user
+marks which servers start closed via `OXIDEGATE_MCP_DISABLE_BY_DEFAULT` +
+`OXIDEGATE_MCP_ALLOWLIST`; they open on demand.
 
-**A conflict this decision surfaces (see Open questions).**
-`opencode/oxidegate-lens.ts:311` currently calls
-`void disableMcpServersByDefault(client, directory)` at plugin load — which
-**auto-disconnects MCP servers in the background**, gated on
-`OXIDEGATE_MCP_DISABLE_BY_DEFAULT`. That sits in visible tension with the
-proposal's "no auto-disable, no background mutation of the user's MCP config".
+**What is forbidden is AUTONOMOUS POLICY CHANGE:** lens deciding *on its own* to
+close a tap because an algorithm judged a server unused.
 
-This design **does not remove it** (it predates this change and is not in
-scope), and resolves the tension narrowly: it survives because it is a
-**declarative human opt-in** — a human set an env var; lens executes a standing
-instruction and decides nothing. What Decision 8 forbids is the thing that would
-genuinely break the invariant: **the recommendation must never feed that
-allowlist.** `disableMcpServersByDefault` reads `process.env` and
-`client.mcp.status()`. It must never read a valve row. The topology rule makes
-that edge impossible to add quietly.
+| | Who judged | Verdict |
+|---|---|---|
+| User marks servers to start closed; lens applies it | **the user** | Legitimate. This is the tap. |
+| lens closes a server because a valve row said "0 uses" | **the tool** | **Forbidden.** |
+
+The distinction is not *whether lens acts* — it acts every load, correctly. It is
+**whose judgment acted**: user-declared policy vs. tool-inferred opinion.
+
+**Choice (the mechanism).** `lib/mcp-valve.mjs` has **no import path — direct or
+transitive — to any call site of `client.mcp.connect` /
+`client.mcp.disconnect`.** It imports `lib/mcp-snapshot.mjs`,
+`lib/mcp-usage.mjs`, and `sanitizeServerName`. It exports data. It receives no
+`client`.
+
+**Justification.** The firewall is unchanged and was always correct; only its
+rationale needed sharpening. It does not enforce "lens never acts" — that rule
+was too blunt and, taken literally, condemned the tap itself. It enforces the
+real line: **the recommendation MUST NEVER feed the default-off policy.**
+`disableMcpServersByDefault` reads `process.env` and `client.mcp.status()` —
+the user's declaration and the current state. It must **never** read a valve row.
+
+Recommendation data flows in exactly one direction: `lib/` → render → **a human's
+eyes** → (maybe) the human edits their own marking. There is no wire from the
+recommendation to the SDK, so no future edit can connect one without visibly
+creating a new dependency edge and defeating the header comment that says why it
+must not exist. The recommendation *informs* the marking; it never *becomes* the
+marking.
+
+The pitch promise — *"measures, does not auto-optimize"* — means: **it does not
+decide FOR you which servers to disable.** It does not mean the tap cannot start
+closed.
 
 ### Decision 9: the tool names graduate; the caveat moves into the payload
 
@@ -352,15 +432,21 @@ sequenceDiagram
 ```
 
 **One-way property.** The `VA -->> CLI` edge is the last one. No arrow leaves
-`buildValveRows` toward `client.mcp.*`. That is Decision 8, drawn.
+`buildValveRows` toward `client.mcp.*`. That is Decision 8, drawn: the
+recommendation reaches a human's eyes, never the policy.
+
+The tap (`disableMcpServersByDefault`) is a **separate, disjoint flow** —
+`process.env` + `client.mcp.status()` → `client.mcp.disconnect`. It never
+touches `VA`. Two flows, no edge between them: that disjointness *is* the
+separation of user-declared policy from tool-inferred opinion.
 
 ## Module boundaries
 
 | Module | Exports | Owns | Never |
 |--------|---------|------|-------|
-| `lib/mcp-snapshot.mjs` (new) | `readMcpSavingsSnapshot({path?, now?})`, `resolveSnapshotPath()` | path resolution, `readFileSync`, defensive parse, staleness (24h per spec), `ok:false` → price `null`, `tokens: null` passthrough | fetch anything, know the wire exists |
+| `lib/mcp-snapshot.mjs` (new) | `readMcpSavingsSnapshot({path?, now?})`, `resolveSnapshotPath()` | path resolution, `readFileSync`, defensive parse, staleness (24h per spec), **`ok:false` → price `unknown` (tested via the `ok` flag, not `.bytes` presence)**, `tokens: null` passthrough | fetch anything, know the wire exists |
 | `lib/mcp-usage.mjs` (new) | `observeMcpUsage(requests, {now?})` | window derivation, sufficiency gate, per-label use counts, `(others)` detection, RFC 3339 parsing | read the filesystem, know the snapshot exists |
-| `lib/mcp-valve.mjs` (new) | `buildValveRows({snapshot, usage})` | the join, collision guard, `joinHealth`, the recommendation conjunction | perform I/O, hold a `client`, format a string for a human |
+| `lib/mcp-valve.mjs` (new) | `buildValveRows({snapshot, usage})` | the join, collision guard, **`unknown` rows for unattributed spend**, `joinHealth`, the recommendation conjunction | perform I/O, hold a `client`, format a string for a human, **drop an observed-spend row** |
 | `lib/mcp-config.mjs` (existing) | `+` re-used `sanitizeServerName` | unchanged | — |
 | `bin/oxidegate-savings.mjs` | — | fetching, **section (d)** rendering (Spanish, per repo convention) | contain a rule |
 | `opencode/oxidegate-lens.ts` | — | SDK calls, tool payload rendering (English) | contain a rule |
@@ -368,7 +454,11 @@ sequenceDiagram
 Each new module gets a **CONTRACT-style header comment** in the established
 house style (see `lib/mcp-config.mjs`): what it refuses to conclude, and why.
 `mcp-valve.mjs`'s header carries Decision 6 in full — the mismatch/0-uses
-identity is the one thing a future reader will not reconstruct from the code.
+identity, and why the `unknown` row exists — since neither is reconstructable
+from the code. `mcp-snapshot.mjs`'s header carries Decision 4's one-line
+invariant verbatim (*an absent measurement is never a zero measurement*) plus
+the reason the guard tests `ok` and not `.bytes`, because the next reader's
+instinct will be to check the field.
 
 ### Path resolution (and the duplication that is deliberate)
 
@@ -443,11 +533,12 @@ the panel was still there.
 
 | Layer | What | How |
 |-------|------|-----|
-| Unit — `mcp-snapshot` | missing file, malformed JSON, **torn/truncated JSON**, unknown shape, entry missing `bytes`, `ok:false` → price `null` (**not 0**), `tokens:null` passthrough, fresh vs. 30h stale | direct import; `path` and `now` injected |
+| Unit — `mcp-snapshot` | missing file, malformed JSON, **torn/truncated JSON**, unknown shape, entry missing `bytes`, **`ok:false` + `bytes:0` → price `unknown` (NOT `0`)**, **`ok:true` + `bytes:0` → a genuine known zero** (the pair that proves the guard reads `ok`, not presence), `tokens:null` passthrough, fresh vs. 30h stale | direct import; `path` and `now` injected |
 | Unit — `mcp-usage` | window arithmetic; gate refuses at 29 min / at 4 requests; passes at both; `(others)` flag; rows with absent `tools_by_server` excluded; empty array **included**; unparseable RFC 3339 row | synthetic `RecentRequest[]` fixtures |
-| Unit — `mcp-valve` | exact match, sanitized match, collision → `'ambiguous'`, snapshot-only, wire-only, **`joinHealth: 'no-correspondence'` suppresses fleet-wide**, `'already-off'` branch, every named refusal reason | pure fixtures, no I/O |
+| Unit — `mcp-valve` | exact match, sanitized match, collision → `'ambiguous'`, snapshot-only, **wire-only spend → `'unknown'` row, never dropped**, **no spend + no price → silence (no row-level recommendation)**, **`joinHealth: 'no-correspondence'` suppresses fleet-wide**, `'already-off'` branch, every named refusal reason | pure fixtures, no I/O |
 | CLI — real binary | section (d) end-to-end across the 5-row degradation matrix | extend `runSavingsCli` with a `homePath` option; new `test/helpers/fake-snapshot.mjs` writes into a tmp `HOME`. Stays hermetic — the helper already builds `env` from scratch |
-| Regression guards | `assertNoUnwindowedRecommendation` (never "candidate to disable" without a window); `assertNoFabricatedZero` (never `0 tok` / `0 B` where the source was `null` or `ok:false`) | new shared asserts in `run-savings-cli.mjs`, alongside `assertNoDeadCausalArtifacts` |
+| Regression guards | `assertNoUnwindowedRecommendation` (never "candidate to disable" without a window); `assertNoFabricatedZero` (never `0 tok` / `0 B` where the source was `null` or `ok:false`); **`assertNoDroppedSpend`** (every wire label with observed spend appears in the rendered output, attributed or as `unknown`) | new shared asserts in `run-savings-cli.mjs`, alongside `assertNoDeadCausalArtifacts` |
+| Topology guard | `lib/mcp-valve.mjs` and its transitive imports contain no reference to `client.mcp.*` — Decision 8 as a test, not a hope | static assert over the module's import graph / source text |
 
 **Why CLI-level tests carry real weight here.** `run-savings-cli.mjs`'s own
 header records that all nine historical defects were *a wrong sentence printed
@@ -459,18 +550,39 @@ window must be tested **in the rendered string**, not just in the return value.
 explicit price of `node --test test/*.test.mjs` being the only runner, and it is
 why the plugin is permitted to contain no rule.
 
+## Resolved questions
+
+- [x] **`disableMcpServersByDefault` at plugin load** — **RULED: keep it. It was
+      never in tension with anything.** The tension was an artifact of a wrong
+      framing ("never acts"), not of the code. The valve is a **tap**: starting
+      closed is the user's declared policy applied, not autonomous action. The
+      feature is intentional and stays. Decision 8 rewritten accordingly; the
+      firewall it specifies is unchanged and still mandatory — the recommendation
+      must never feed the default-off policy.
+- [x] **Port** — **RESOLVED: 8080 is the project default.** The code
+      (`oxidegate-lens.ts:40`, `DEFAULT_PORT = 8080`), `config.yaml`, and
+      OxideGate's own default all agree. The `127.0.0.1:8899` in the earlier
+      design brief was a **local workaround on one machine** (port 8080 occupied
+      by a Docker container), never the project default. No artifact asserts 8899.
+      The port MUST always resolve via config/env
+      (`OXIDEGATE_LENS_URL` → `OXIDEGATE_PORT` → `8080`), never hardcoded — which
+      is exactly what `resolveBaseUrl()` already does, and exactly why a
+      non-default local setup needs no code change.
+
 ## Open questions
 
-- [ ] **`disableMcpServersByDefault` auto-disconnects at plugin load**
-      (`oxidegate-lens.ts:311`), which sits in tension with the proposal's "no
-      background mutation". Decision 8 keeps it (declarative human opt-in) and
-      firewalls the recommendation away from it. **Needs a user ruling**: keep
-      as-is, or retire in a follow-up? Does not block the architecture.
-- [ ] **Port discrepancy.** The design brief cites OxideGate at `127.0.0.1:8899`;
-      the code, `config.yaml`, and OxideGate's own default all say **8080**
-      (`OXIDEGATE_PORT` overrides). This design assumes 8080. If 8899 is the real
-      local setup, it is an env-var matter, not a code change — but the docs
-      disagree with the brief and someone should say which is right.
 - [ ] **Threshold values** (30 min / 5 requests) are judgment, not measurement.
       The *shape* of the gate is fixed here; the numbers are a task-time call and
       are trivially tunable as named constants.
+
+## Revision record
+
+These artifacts are a decision record. Where a ruling reversed earlier design
+text, the earlier position is preserved so the next reader inherits the
+distinction rather than a silently rewritten history.
+
+| # | Was | Now | Why |
+|---|---|---|---|
+| **1** | Decision 6 found "0 uses" and "name mismatch" produce identical `snapshot-only` rows with no tie-breaker, and accepted a silent partial-mismatch residual risk. `joinHealth` was the only guard. | Unattributed wire spend renders as a `join: 'unknown'` row and is **never dropped**. `joinHealth` **kept** as the fleet-level guard. No spend + no price → silence. | The wire is the authority on spend. The ambiguity cannot be resolved in code, so it is handed to the human **in a visible form**. A dropped row deletes the very evidence of the broken join. Two guards, two failure scales — fleet-total (`joinHealth`) and partial (`unknown` row). |
+| **2** | Decision 4 already mapped `ok:false` → `price: null`, but framed it as one local rule; the spec still guarded with field presence. | The guard **tests the `ok` flag**, and bytes + tokens are stated as **ONE** invariant: *an absent measurement is never a zero measurement.* | Presence is not measurement. `ok:false` ships a present, typed, meaningless `0` through the exact door a field-presence check leaves open. The `ok:true, bytes:0` case proves only the flag can separate a real zero from an unmeasurable one. |
+| **3** | Decision 8: *"informs, never acts"*; `disableMcpServersByDefault` described as a **conflict** / "auto-disconnects in the background", surviving narrowly as a "declarative human opt-in", flagged as an open question needing a ruling. | Decision 8: **the valve is a TAP.** Starting closed is the user's declared policy, applied — legitimate, intentional, stays. Forbidden = **autonomous policy change**. Firewall unchanged, rationale sharpened. | **Corrects an error the framing introduced, not a change of mind.** "Never acts" condemned a shipped feature as a violation. The real line is *whose judgment acted*: user-declared policy vs. tool-inferred opinion. The firewall was always right for a reason the old framing misstated. |

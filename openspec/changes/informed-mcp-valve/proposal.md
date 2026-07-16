@@ -46,24 +46,54 @@ One surface that answers three questions at once, per MCP server:
 |----------|--------|--------|
 | **What does it cost?** | mcp-savings snapshot (`mcpMeasurement[].bytes` / `.tokens`) | Counterfactual. Known even when the server is off. |
 | **Is it earning it?** | OxideGate `GET /requests` → `tools_by_server` | Measured fact on the wire. |
-| **Can I act on it?** | OpenCode SDK `client.mcp.connect` / `.disconnect` | The valve. Flipped by the human, never by lens. |
+| **Can I act on it?** | OpenCode SDK `client.mcp.connect` / `.disconnect` | The valve. Opened and closed under the user's declared policy, never under lens' own judgment. |
 
 ### The recommendation rule (settled — do not reopen)
 
-**`0 uses = cost with no return = candidate to disable`.**
+Three inputs, three distinct outcomes. The rule is not one branch; it is a
+partition, and every branch is named so none can be silently absent:
 
-Chosen deliberately because it **survives multi-harness**: it needs no
-tokenizer and no context-window assumption. A server whose tools never appear
-in `tools_by_server` across the observed window is paying rent and producing
+| Observed on the wire | Priced by the snapshot | Outcome |
+|---|---|---|
+| spend, attributable to a known server | yes | Normal row: price + usage. |
+| spend, attributable to **no** snapshot server | — | Row labeled **`unknown`** (unattributed). **NEVER dropped.** |
+| **no spend** | no price | **Silence.** No recommendation, no nag. |
+| **no spend** | has a price tag | **`candidate to disable`** — cost with no return. Always shipped with its observation window. |
+
+**`0 uses = cost with no return = candidate to disable`** was chosen
+deliberately because it **survives multi-harness**: it needs no tokenizer and no
+context-window assumption. A server whose tools never appear in
+`tools_by_server` across the observed window is paying rent and producing
 nothing. That statement is true regardless of provider, model, or tokenizer
 availability.
 
-### Informs and recommends. Never acts.
+**The wire is the authority on spend.** Wire spend that matches no snapshot
+server MUST still be shown, as its own `unknown` row. Dropping it is the worst
+available outcome: it deletes evidence of real money spent. An `unknown` row
+carrying real spend is the **tell-tale of a broken join** — it converts a
+silent, invisible mismatch into something a human can SEE and act on. Being
+unable to attribute spend is a fact about lens' knowledge, not a fact about the
+spend.
 
-The valve MAY label a server "candidate to disable". A human flips the switch.
-The product pitch promises *"measures, does not auto-optimize"* — this change
-honors it literally. No auto-disable, no "smart" pruning, no background
-mutation of the user's MCP config.
+### The valve is a TAP: it informs, it does not decide FOR you
+
+The valve MAY label a server "candidate to disable". A human decides. The
+product pitch promises *"measures, does not auto-optimize"*, and this is what
+that promise means — **precisely**:
+
+| Legitimate (ships, stays) | Forbidden (never ships) |
+|---|---|
+| **Starting closed is the user's declared policy, applied.** The user marks which servers start disabled (`OXIDEGATE_MCP_DISABLE_BY_DEFAULT` + `OXIDEGATE_MCP_ALLOWLIST`, or all of them); they open on demand. | **Autonomous policy change.** lens deciding on its own to close a tap because an algorithm judged a server unused. |
+
+The water is always there. The tap lets it through or cuts it off **according to
+the user's need, as the user declared it**. `disableMcpServersByDefault`
+(`opencode/oxidegate-lens.ts:165`, invoked at load, line 311) is that tap
+mechanism and is an intentional, shipped feature — not a design violation.
+
+The line that must never be crossed: **the recommendation MUST NEVER auto-feed
+the default-off policy.** The recommendation informs the human's *marking*; it
+never becomes the marking. What separates the two is not "lens never acts" — it
+is *whose judgment acted*: **user-declared policy vs. tool-inferred opinion.**
 
 ### The file contract (hard constraint)
 
@@ -102,18 +132,35 @@ number would imply a precision this product does not have.
 | b | **Schema bytes** | mcp-savings, local MCP SDK | **Measured locally, re-serialized.** Real, but may differ from the wire — the host may serialize differently. |
 | c | **Tokens (OpenAI)** | `packages/core/src/tokenize.ts`, o200k_base | **Exact.** |
 | d | **Tokens (Claude)** | — | **Absent.** `countTokens` returns `null`. |
+| e | **Bytes, unmeasurable** | mcp-savings, `ok: false` | **Absent.** The connect/list failed. `bytes: 0` is the sum of an empty list — a real zero that means "could not measure". |
 
-### Bytes are the floor, tokens are the headline only when exact
+### THE honesty invariant: an absent measurement is never a zero measurement
+
+One rule, covering **both** bytes and tokens. They are the same door, and it
+must be shut on both sides:
+
+| Instrument says | Means | MUST render as | MUST NEVER render as |
+|---|---|---|---|
+| `tokens: null` | "no accurate tokenizer for this model" | absent; headline degrades to bytes | `0 tok` |
+| `ok: false` | "could not measure this server" | **"cannot measure" / price unknown** | `0 B` |
 
 - **BYTES are the universal floor.** OxideGate measures them on the wire for
-  any provider. They always exist.
+  any provider. They always exist *on the wire*. They do **not** always exist in
+  the snapshot: when mcp-savings could not reach a server (`ok: false`), its
+  price is **unknown**, and saying so is better than reporting `0`.
 - **TOKENS are the headline ONLY where the tokenizer is exact.** Per the
   HONESTY NOTE in `packages/core/src/tokenize.ts`, local tokenization is exact
   **only** for the OpenAI o200k_base family. For all Claude models
-  `countTokens` returns `null`.
-- **`null` means "no accurate tokenizer". It NEVER means zero.** Coercing
-  `null` to `0` is forbidden. On Claude Code the headline **degrades to bytes**
+  `countTokens` returns `null`. On Claude Code the headline **degrades to bytes**
   rather than rendering a blank or a lie.
+- **Neither `null` nor `ok: false` may be coerced to `0`.** A blank is
+  dishonest; a zero is a lie. "I could not measure this" is a first-class,
+  renderable answer.
+
+**Field-presence checking does not guard this door.** `ok: false` ships a
+`bytes` field that is present, typed, numeric, and meaningless. Any check that
+asks "does `.bytes` exist?" waves it through. The check MUST test the **`ok`
+flag**, not the presence of `.bytes`.
 
 ## Scope
 
@@ -123,8 +170,10 @@ number would imply a precision this product does not have.
   defensively (missing file, malformed JSON, unknown/older shape, partial
   write → degrade, never throw).
 - Join snapshot cost data with OxideGate wire usage (`tools_by_server`) per MCP
-  server.
-- Apply the `0 uses = candidate to disable` rule and label accordingly.
+  server, surfacing unattributable wire spend as an `unknown` row rather than
+  dropping it.
+- Apply the `0 uses = candidate to disable` rule and label accordingly, always
+  with its observation window.
 - Render the informed valve surface: per server, its price, its real usage, its
   recommendation, and its toggle.
 - Graduate the EXPERIMENTAL valve tools
@@ -149,8 +198,11 @@ number would imply a precision this product does not have.
 
 - **Routing is OUT.** Whether OpenCode traffic reaches OxideGate is a separate
   concern. This change does not touch it.
-- **Auto-acting is OUT.** No auto-disable, no automatic config mutation, no
-  background optimization. The human flips the switch. Always.
+- **Autonomous policy change is OUT.** lens never decides on its own which
+  servers to close. The recommendation MUST NEVER feed
+  `disableMcpServersByDefault`'s allowlist. Applying the user's *declared*
+  default-off policy is NOT in this non-goal — that is the tap working as
+  designed (see "The valve is a TAP" above).
 - **No runtime dependency on `@mcp-savings/core`.** Not now, not "just for
   types", not "just for `loadSnapshot`". The file contract is the contract.
 - **lens does not measure anything itself.** It stays a read-only presentation
@@ -190,6 +242,18 @@ works.
 The comment gets corrected as part of this change. Routing itself stays out of
 scope — this is a documentation honesty fix, not a feature.
 
+## Revision record — what these rulings reversed, and why
+
+These artifacts are a decision record, not a rewritable draft. Where a ruling
+overturned earlier text, the earlier position is preserved here so the next
+reader inherits the *distinction*, not a silently edited history.
+
+| # | What this proposal used to say | What it says now | Why it changed |
+|---|---|---|---|
+| **1** | Silent on unattributable wire spend. The join's `snapshot-only` rows made "0 uses" and "name mismatch" indistinguishable, with no row-level tie-breaker. | Wire spend matching no snapshot server surfaces as an `unknown` row and is **never dropped**. No spend + no price → silence. | The wire is the authority on spend. A dropped row is the worst outcome; an `unknown` row makes a mismatch **self-evident to a human**. Complements the fleet-level `joinHealth` guard — does not replace it. |
+| **2** | "REQUIRED `.bytes`" — satisfied by field presence. `ok: false` yields `bytes: 0`, passing the check while meaning "could not measure". | `ok: false` → **"cannot measure" / price unknown**, never `0`. Stated as ONE honesty invariant covering bytes and tokens together. | An absent measurement is never a zero measurement. The rule already enforced for `tokens: null` had a second door — bytes — that field-presence checking does not guard. |
+| **3** | *"Informs and recommends, NEVER acts"*; *"no background mutation of the user's MCP config"*. | **The valve is a TAP.** Starting closed is the user's declared policy, applied — legitimate. What is forbidden is **autonomous policy change**. | **This corrects an error, not a change of mind.** The blanket framing condemned `disableMcpServersByDefault` — an intentional shipped feature — as a design violation. The real line is *whose judgment acted*: user-declared policy vs. tool-inferred opinion. The existing firewall (recommendation never feeds the default-off policy) was always correct; only its rationale needed sharpening. |
+
 ## Risks and tradeoffs
 
 | Topic | Detail | Treatment |
@@ -198,14 +262,17 @@ scope — this is a documentation honesty fix, not a feature.
 | **Untyped file across a version boundary** | The snapshot is written by a separately-versioned tool. Its shape can drift without lens noticing until runtime. | Defensive parsing is mandatory. Unknown shape → treat as missing. The `timestamp` field gates staleness. This is the accepted cost of loose coupling; a runtime dep would trade it for a worse coupling. |
 | **Schema bytes ≠ wire bytes** | mcp-savings re-serializes schemas locally; the host may serialize differently. The two byte numbers can disagree. | Do NOT reconcile them into one number. Label them as different qualities (b vs a). Disagreement is information, not a bug to hide. |
 | **`null` tokens on Claude** | The headline metric disappears on the most likely harness for this user. | By design. Degrade to bytes — the universal floor. NEVER coerce `null` to `0`. A blank is dishonest; a zero is a lie. |
-| **`0 uses` depends on the observation window** | A server used once a week reads as "0 uses" on a fresh OxideGate. The recommendation could be wrong. | It is a **recommendation**, never an action — this is exactly why the valve never auto-acts. The window MUST be surfaced with the label so the human can judge. |
+| **`ok: false` ships a plausible `0`** | mcp-savings sums an empty tool list when the connect/list fails, so an unmeasurable server arrives typed, present, and `0`. A field-presence check waves it through. | Test the **`ok` flag**, not the presence of `.bytes`. Map `ok: false` → price unknown, discard its `bytes`. Same invariant as `null` tokens: absent is not zero. |
+| **Unattributable wire spend** | Wire traffic that matches no snapshot server has no home row. Dropping it would delete evidence of real spend and hide a broken join. | Surface it as an `unknown` row. Never drop it. The row is the tell-tale that makes a naming mismatch visible to a human instead of silent. |
+| **`0 uses` depends on the observation window** | A server used once a week reads as "0 uses" on a fresh OxideGate. The recommendation could be wrong. | It is a **recommendation**, never an autonomous act — the human decides what gets marked. The window MUST be surfaced with the label so the human can judge. |
 | **Panel removal is user-visible** | Retiring the mcp-savings sidebar panel removes a surface someone may already rely on. | Sequence it: lens' informed surface lands **first**, the mcp-savings panel retires **after**. Never a gap with no permanent surface. |
 | **Stale snapshot mistaken for current** | A price from last week presented as today's is worse than no price. | The `timestamp` is not optional in the UI. Stale is labeled stale. |
 | **Discovery invite becomes nagging** | "Install mcp-savings" on every render is an ad, not a hint. | Keep it a quiet, one-line, non-blocking hint. It follows the existing `probeEndpoint` precedent: say it once, clearly, then be quiet. |
 
 Cross-cutting principle (non-negotiable): **unknown is `null`/absent, never an
-invented number.** Bytes are the floor. Tokens are a headline only where exact.
-The valve informs; the human acts.
+invented number** — for bytes and tokens alike. Bytes are the floor. Tokens are
+a headline only where exact. Observed spend is never dropped. The valve informs;
+the human decides what policy to declare.
 
 ## Rollback plan
 
@@ -225,11 +292,19 @@ The valve informs; the human acts.
 - A configured-but-disabled MCP server shows its **price** (bytes, and tokens
   only where exact) in the lens valve surface — a number that does not exist on
   the wire.
-- A server with 0 entries in `tools_by_server` across the observed window is
-  labeled **candidate to disable**, with the window stated. Nothing is
-  disabled automatically.
+- A server with 0 entries in `tools_by_server` across the observed window **and
+  a known price** is labeled **candidate to disable**, with the window stated.
+  Nothing is disabled by lens' own judgment.
+- A server with no observed spend **and** no price tag produces **no
+  recommendation at all** — the surface stays silent about it.
+- Wire spend attributable to no snapshot server renders as an `unknown` row. No
+  observed spend is ever dropped from the surface.
 - On a Claude model, tokens are **absent** and the headline degrades to bytes.
   No `0` appears where a tokenizer is missing.
+- A snapshot entry with `ok: false` renders as **"cannot measure"**, never as
+  `0 B` — even though its `bytes` field is present and numeric.
+- `disableMcpServersByDefault` still applies the user's declared default-off
+  policy at plugin load, and no valve row reaches it.
 - With `~/.config/mcp-savings/snapshot.json` deleted, lens still starts, the
   valve still toggles, and the surface invites installing mcp-savings.
 - With the snapshot corrupted to invalid JSON, lens degrades to the missing
@@ -241,11 +316,18 @@ The valve informs; the human acts.
 
 ## Next step
 
-With this proposal approved, `sdd-spec` and `sdd-design` proceed in parallel:
+`sdd-spec` and `sdd-design` are complete, and all three artifacts now carry the
+rulings above:
 
-- **`sdd-spec`** — the data contract: the snapshot fields lens consumes, the
-  defensive-parse and staleness rules, the four data qualities and their
-  labels, and the `0 uses` recommendation rule as Given/When/Then scenarios.
-- **`sdd-design`** — the architecture: where the snapshot reader lives in
-  `lib/`, how the wire/snapshot join is shaped, the degradation paths, and the
-  sequencing that retires the mcp-savings panel without leaving a gap.
+- **`spec.md`** — the data contract: the snapshot fields lens consumes, the
+  defensive-parse and staleness rules, the data qualities and their labels, the
+  `ok`-flag guard, the `unknown` row, and the `0 uses` rule as Given/When/Then
+  scenarios.
+- **`design.md`** — the architecture: the `lib/` modules, the FULL OUTER JOIN,
+  the derived window and sufficiency gate, `joinHealth`, the topology firewall
+  (Decision 8), and the panel-retirement sequencing.
+
+**Next: `sdd-tasks`** — break the three PRs of the sequencing table into
+implementable steps. Note for that phase: the review-workload forecast should
+account for this being a two-repo slice; PR 1 (lens) stands alone and lands
+first.
