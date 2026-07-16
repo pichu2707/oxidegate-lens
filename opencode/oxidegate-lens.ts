@@ -40,6 +40,9 @@
 const DEFAULT_PORT = 8080;
 const FETCH_TIMEOUT_MS = 300;
 
+const MCP_DISABLE_BY_DEFAULT_ENV = 'OXIDEGATE_MCP_DISABLE_BY_DEFAULT';
+const MCP_ALLOWLIST_ENV = 'OXIDEGATE_MCP_ALLOWLIST';
+
 function resolveBaseUrl(): string {
   if (process.env.OXIDEGATE_LENS_URL) return process.env.OXIDEGATE_LENS_URL;
   const port = process.env.OXIDEGATE_PORT ?? String(DEFAULT_PORT);
@@ -101,6 +104,76 @@ function countTools(value: unknown): number | null {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function envFlagEnabled(name: string): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
+function mcpServerNames(status: unknown): string[] {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return [];
+  return Object.keys(status);
+}
+
+function envList(name: string): Set<string> {
+  return new Set(
+    (process.env[name] ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+}
+
+async function disableMcpServersByDefault(client: any, directory: string | undefined): Promise<void> {
+  if (!envFlagEnabled(MCP_DISABLE_BY_DEFAULT_ENV)) return;
+
+  const allowlist = envList(MCP_ALLOWLIST_ENV);
+  const query = directory ? { directory } : undefined;
+  try {
+    const status = unwrapSdkResponse(await client.mcp.status({ query }));
+    const servers = mcpServerNames(status);
+    const serversToDisable = servers.filter((server) => !allowlist.has(server));
+    const preserved = servers.filter((server) => allowlist.has(server));
+    if (servers.length === 0) {
+      console.log('[oxidegate-lens] MCP disabled-by-default enabled; no MCP servers found');
+      return;
+    }
+
+    if (serversToDisable.length === 0) {
+      console.log(
+        `[oxidegate-lens] MCP disabled-by-default enabled; disabled=- preserved=${preserved.join(', ') || '-'}`,
+      );
+      return;
+    }
+
+    const results = await Promise.allSettled(
+      serversToDisable.map(async (server) => {
+        await client.mcp.disconnect({
+          path: { name: server },
+          query,
+        });
+        return server;
+      }),
+    );
+
+    const disabled = results
+      .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
+      .map((r) => r.value);
+    const failed = results
+      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      .map((r) => formatError(r.reason));
+
+    console.log(
+      `[oxidegate-lens] MCP disabled-by-default enabled; disabled=${disabled.join(', ') || '-'} preserved=${
+        preserved.join(', ') || '-'
+      }${
+        failed.length ? ` failed=${failed.join(' | ')}` : ''
+      }`,
+    );
+  } catch (error) {
+    console.warn(`[oxidegate-lens] MCP disabled-by-default failed: ${formatError(error)}`);
+  }
 }
 
 async function loadOpenCodeToolHelper(): Promise<any | null> {
@@ -195,6 +268,7 @@ export async function OxidegateLens({ project, client, $, directory, worktree }:
   // single most likely misconfiguration, and it is invisible from the hook.
   probeEndpoint(resolveBaseUrl());
   const openCodeTool = await loadOpenCodeToolHelper();
+  void disableMcpServersByDefault(client, directory);
 
   return {
     ...(openCodeTool
