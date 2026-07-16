@@ -7,7 +7,15 @@
   "engines": {
     "node": ">=24"
   },
-  "dependencies": {
+  "peerDependencies": {
+    "@opencode-ai/plugin": "^1.18.2"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
     "@opencode-ai/plugin": "^1.18.2"
   },
   "scripts": {

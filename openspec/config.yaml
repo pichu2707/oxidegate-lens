@@ -1,8 +1,11 @@
 schema: spec-driven
 
 context: |
-  Tech stack: Node.js >=24, ESM only, zero-runtime-dependency by design (only
-  declared dependency is @opencode-ai/plugin, a peer for the OpenCode host).
+  Tech stack: Node.js >=24, ESM only, zero-runtime-dependency by design — the
+  package declares NO `dependencies` at all. @opencode-ai/plugin is an OPTIONAL
+  peer, provided by the OpenCode host; the plugin imports it dynamically and
+  degrades when it is absent, so the CLI never pays for it. Host adapters are
+  meant to be selectable, not mandatory — keep new host support optional too.
   CLI entrypoint bin/oxidegate-savings.mjs; domain logic in lib/ (e.g.
   lib/mcp-config.mjs); OpenCode plugin at opencode/oxidegate-lens.ts.
   Architecture: read-only presentation layer over OxideGate (Rust proxy) via
