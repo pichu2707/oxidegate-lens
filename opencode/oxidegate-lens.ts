@@ -90,6 +90,79 @@ function formatValue(value: unknown, fmt: (v: any) => string): string {
   return value === null || value === undefined ? '-' : fmt(value);
 }
 
+function unwrapSdkResponse(value: any): any {
+  if (value && typeof value === 'object' && 'data' in value) return value.data;
+  return value;
+}
+
+function countTools(value: unknown): number | null {
+  return Array.isArray(value) ? value.length : null;
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function loadOpenCodeToolHelper(): Promise<any | null> {
+  try {
+    return (await import('@opencode-ai/plugin')).tool;
+  } catch (error) {
+    console.warn(
+      `[oxidegate-lens] manual MCP valve tools unavailable: @opencode-ai/plugin could not be loaded (${formatError(
+        error,
+      )}). Existing OxideGate observer logging remains active.`,
+    );
+    return null;
+  }
+}
+
+async function collectMcpValveSnapshot(
+  client: any,
+  directory: string | undefined,
+  provider?: string,
+  model?: string,
+): Promise<Record<string, unknown>> {
+  const query = directory ? { directory } : undefined;
+  const status = unwrapSdkResponse(await client.mcp.status({ query }));
+  const snapshot: Record<string, unknown> = {
+    mcp_status: status,
+    mcp_server_count: status && typeof status === 'object' ? Object.keys(status).length : null,
+  };
+
+  if (provider && model) {
+    const tools = unwrapSdkResponse(
+      await client.tool.list({
+        query: {
+          ...(directory ? { directory } : {}),
+          provider,
+          model,
+        },
+      }),
+    );
+
+    snapshot.tool_list = tools;
+    snapshot.tool_count = countTools(tools);
+  } else {
+    snapshot.tool_list = 'skipped: pass provider and model to compare OpenCode tool-list size';
+    snapshot.tool_count = null;
+  }
+
+  return snapshot;
+}
+
+function valveResult(value: Record<string, unknown>): string {
+  return JSON.stringify(
+    {
+      experiment: 'oxidegate-lens manual OpenCode MCP valve',
+      warning:
+        'Manual runtime control only. This does not promise same-request lazy MCP behavior or outgoing tool-list mutation.',
+      ...value,
+    },
+    null,
+    2,
+  );
+}
+
 async function logLatestRequest(): Promise<void> {
   const baseUrl = resolveBaseUrl();
   const res = await fetch(`${baseUrl}/requests`, {
@@ -121,8 +194,114 @@ export async function OxidegateLens({ project, client, $, directory, worktree }:
   // Once, at load: is the thing on that port even OxideGate? Wrong-port is the
   // single most likely misconfiguration, and it is invisible from the hook.
   probeEndpoint(resolveBaseUrl());
+  const openCodeTool = await loadOpenCodeToolHelper();
 
   return {
+    ...(openCodeTool
+      ? {
+          tool: {
+            oxidegate_lens_experimental_mcp_status: openCodeTool({
+              description:
+                'EXPERIMENTAL: inspect OpenCode MCP server status and optionally list tools for a provider/model before manual MCP valve tests.',
+              args: {
+                provider: openCodeTool.schema.string().optional(),
+                model: openCodeTool.schema.string().optional(),
+              },
+              async execute(args, context) {
+                try {
+                  const snapshot = await collectMcpValveSnapshot(
+                    client,
+                    context.directory ?? directory,
+                    args.provider,
+                    args.model,
+                  );
+                  const toolCount = snapshot.tool_count === null ? 'skipped' : snapshot.tool_count;
+                  console.log(`[oxidegate-lens] experimental MCP status snapshot; tools=${toolCount}`);
+                  return valveResult({ ok: true, action: 'status', snapshot });
+                } catch (error) {
+                  return valveResult({ ok: false, action: 'status', error: formatError(error) });
+                }
+              },
+            }),
+            oxidegate_lens_experimental_mcp_disconnect: openCodeTool({
+              description:
+                'EXPERIMENTAL: manually disconnect one OpenCode MCP server and report MCP/tool-list snapshots before and after.',
+              args: {
+                server: openCodeTool.schema.string(),
+                provider: openCodeTool.schema.string().optional(),
+                model: openCodeTool.schema.string().optional(),
+              },
+              async execute(args, context) {
+                const activeDirectory = context.directory ?? directory;
+                try {
+                  const before = await collectMcpValveSnapshot(client, activeDirectory, args.provider, args.model);
+                  const disconnected = unwrapSdkResponse(
+                    await client.mcp.disconnect({
+                      path: { name: args.server },
+                      query: activeDirectory ? { directory: activeDirectory } : undefined,
+                    }),
+                  );
+                  const after = await collectMcpValveSnapshot(client, activeDirectory, args.provider, args.model);
+                  console.log(`[oxidegate-lens] experimental MCP disconnect ${args.server}; result=${disconnected}`);
+                  return valveResult({
+                    ok: true,
+                    action: 'disconnect',
+                    server: args.server,
+                    sdk_result: disconnected,
+                    before,
+                    after,
+                  });
+                } catch (error) {
+                  return valveResult({
+                    ok: false,
+                    action: 'disconnect',
+                    server: args.server,
+                    error: formatError(error),
+                  });
+                }
+              },
+            }),
+            oxidegate_lens_experimental_mcp_connect: openCodeTool({
+              description:
+                'EXPERIMENTAL: manually connect one OpenCode MCP server and report MCP/tool-list snapshots before and after.',
+              args: {
+                server: openCodeTool.schema.string(),
+                provider: openCodeTool.schema.string().optional(),
+                model: openCodeTool.schema.string().optional(),
+              },
+              async execute(args, context) {
+                const activeDirectory = context.directory ?? directory;
+                try {
+                  const before = await collectMcpValveSnapshot(client, activeDirectory, args.provider, args.model);
+                  const connected = unwrapSdkResponse(
+                    await client.mcp.connect({
+                      path: { name: args.server },
+                      query: activeDirectory ? { directory: activeDirectory } : undefined,
+                    }),
+                  );
+                  const after = await collectMcpValveSnapshot(client, activeDirectory, args.provider, args.model);
+                  console.log(`[oxidegate-lens] experimental MCP connect ${args.server}; result=${connected}`);
+                  return valveResult({
+                    ok: true,
+                    action: 'connect',
+                    server: args.server,
+                    sdk_result: connected,
+                    before,
+                    after,
+                  });
+                } catch (error) {
+                  return valveResult({
+                    ok: false,
+                    action: 'connect',
+                    server: args.server,
+                    error: formatError(error),
+                  });
+                }
+              },
+            }),
+          },
+        }
+      : {}),
     'tool.execute.after': async () => {
       try {
         await logLatestRequest();
