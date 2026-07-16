@@ -1,0 +1,80 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Node.js >=24, ESM only, zero-runtime-dependency by design (only
+  declared dependency is @opencode-ai/plugin, a peer for the OpenCode host).
+  CLI entrypoint bin/oxidegate-savings.mjs; domain logic in lib/ (e.g.
+  lib/mcp-config.mjs); OpenCode plugin at opencode/oxidegate-lens.ts.
+  Architecture: read-only presentation layer over OxideGate (Rust proxy) via
+  its HTTP endpoints (GET /requests, port 8080 by default). MUST NEVER take a
+  runtime dependency on @mcp-savings/core — integration with mcp-savings is a
+  FILE contract only: mcp-savings writes ~/.config/mcp-savings/snapshot.json,
+  lens reads it with plain fs + JSON.parse. Never proxies, intercepts, or
+  measures traffic itself; only shows what OxideGate already computed.
+  Testing: node --test test/*.test.mjs (25 tests passing as of last check).
+  Strict TDD: enabled (test runner detected, no explicit override found).
+  Style: docs/ in Spanish (neutral, Spain-flavored per README/docs copy);
+  code identifiers, code comments, and CLI/test output copy in English —
+  CONFIRMED by inspecting lib/mcp-config.mjs, opencode/oxidegate-lens.ts, and
+  docs/GUIA-INSTALACION.md. Long CONTRACT-style file-header comments explain
+  design rationale (see lib/mcp-config.mjs). Conventional commits, no
+  Co-Authored-By / AI attribution (matches OxideGate convention). Current
+  branch: feat/opencode-mcp-valve.
+  Ecosystem: three tools compose into one product. OxideGate (Rust proxy,
+  sibling repo /home/javilazaro/Documents/OxideGate) measures real spend on
+  the wire for any harness ("what did I actually spend"). mcp-savings
+  (sibling repo /home/javilazaro/Documents/mcp-savings, pnpm monorepo:
+  packages/core + packages/opencode) measures MCP schema cost
+  counterfactually via the official MCP SDK ("what WOULD this server cost,
+  even if off"; surfaced on-demand via /saving). oxidegate-lens is the
+  permanent, simple, ACTIONABLE face: shows what matters now and lets the
+  user toggle MCP servers on/off (the "valve") plus configure defaults.
+
+testing:
+  strict_tdd: true
+  test_command: "node --test test/*.test.mjs"
+  lint_command: ""
+  test_layers:
+    unit: true
+    integration: false
+    e2e: false
+  coverage:
+    available: false
+    command: ""
+  quality:
+    linter: "—"
+    type_checker: "—"
+    formatter: "—"
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Never propose a runtime dependency on @mcp-savings/core; cross-tool
+      integration must stay a file contract (~/.config/mcp-savings/snapshot.json)
+    - Preserve the zero-runtime-dependency principle unless the proposal
+      explicitly justifies and gets sign-off for a new dependency
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+    - Respect the read-only presentation layer boundary: this project reads
+      OxideGate's HTTP endpoints and the mcp-savings snapshot file; it never
+      measures, proxies, or intercepts anything itself
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    - Follow existing code patterns (CONTRACT-style header comments, ESM,
+      plain fs/JSON for cross-tool reads)
+    - Code and comments in English; user-facing docs in docs/ in Spanish
+    - Conventional commits only; never add Co-Authored-By or AI attribution
+    tdd: true
+    test_command: "node --test test/*.test.mjs"
+  verify:
+    test_command: "node --test test/*.test.mjs"
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
