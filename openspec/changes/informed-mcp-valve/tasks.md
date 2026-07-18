@@ -36,8 +36,8 @@ If `feature-branch-chain`: 1a bases on tracker; 1b/1c/1d each base on the prior 
 
 ## Phase 2: `lib/mcp-usage.mjs` (PR 1b)
 
-- [ ] 2.1 RED — `test/mcp-usage.test.mjs`: window = newest−oldest; gate refuses at 29min/4 requests, passes at 30min/5; `(others)` flag; rows with absent `tools_by_server` excluded, empty array included; unparseable RFC 3339 row dropped.
-- [ ] 2.2 GREEN — implement `observeMcpUsage(requests, {now?})`. Declare `MIN_WINDOW_MS` (30 min) and `MIN_REQUEST_COUNT` (5) as **named constants with a comment stating they are judgment calls, not measured thresholds**.
+- [x] 2.1 RED — `test/mcp-usage.test.mjs`: window = newest−oldest; gate refuses at 29min/4 requests, passes at 30min/5; `(others)` flag; rows with absent `tools_by_server` excluded, empty array included; unparseable RFC 3339 row dropped.
+- [x] 2.2 GREEN — implement `observeMcpUsage(requests, {now?})`. Declare `MIN_WINDOW_MS` (30 min) and `MIN_REQUEST_COUNT` (5) as **named constants with a comment stating they are judgment calls, not measured thresholds**.
 
 ## Phase 3: `lib/mcp-valve.mjs` (PR 1c)
 
