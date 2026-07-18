@@ -31,8 +31,8 @@ If `feature-branch-chain`: 1a bases on tracker; 1b/1c/1d each base on the prior 
 
 ## Phase 1: `lib/mcp-snapshot.mjs` (PR 1a)
 
-- [ ] 1.1 RED — `test/mcp-snapshot.test.mjs`: missing file, malformed/torn JSON, entry missing `bytes`, **`ok:false`+`bytes:0` → price `unknown`**, **`ok:true`+`bytes:0` → known `0`** (load-bearing pair proving the guard reads `ok`, not presence), `tokens:null` passthrough, fresh vs 30h-stale (24h threshold).
-- [ ] 1.2 GREEN — implement `readMcpSavingsSnapshot({path?, now?})`, `resolveSnapshotPath()`. CONTRACT header states the honesty invariant verbatim + why `ok` not `.bytes` is tested. `resolveSnapshotPath` duplicates `mcp-savings/config.ts::snapshotPath()` by value, no import.
+- [x] 1.1 RED — `test/mcp-snapshot.test.mjs`: missing file, malformed/torn JSON, entry missing `bytes`, **`ok:false`+`bytes:0` → price `unknown`**, **`ok:true`+`bytes:0` → known `0`** (load-bearing pair proving the guard reads `ok`, not presence), `tokens:null` passthrough, fresh vs 30h-stale (24h threshold).
+- [x] 1.2 GREEN — implement `readMcpSavingsSnapshot({path?, now?})`, `resolveSnapshotPath()`. CONTRACT header states the honesty invariant verbatim + why `ok` not `.bytes` is tested. `resolveSnapshotPath` duplicates `mcp-savings/config.ts::snapshotPath()` by value, no import.
 
 ## Phase 2: `lib/mcp-usage.mjs` (PR 1b)
 
