@@ -33,6 +33,8 @@
 // "tool.execute.after" was the closest documented match to "after a
 // message/tool completes."
 
+import { unwrapSdkResponse } from '../lib/sdk-response.mjs';
+
 // OxideGate's own default. Kept deliberately in sync with it — but 8080 is a
 // crowded port (Apache, Tomcat, Jenkins all squat it), so if OxideGate is
 // running anywhere else you MUST set OXIDEGATE_PORT. See warnIfNotOxidegate:
@@ -92,11 +94,6 @@ function probeEndpoint(baseUrl: string): void {
 
 function formatValue(value: unknown, fmt: (v: any) => string): string {
   return value === null || value === undefined ? '-' : fmt(value);
-}
-
-function unwrapSdkResponse(value: any): any {
-  if (value && typeof value === 'object' && 'data' in value) return value.data;
-  return value;
 }
 
 function countTools(value: unknown): number | null {
