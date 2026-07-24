@@ -179,10 +179,19 @@ test('defectos 3 y 4: mismo entry con dos `client` distintos -> tabla y veredict
   // normaliza ese valor y todo lo demás — tabla, veredictos, texto de
   // ausencia — tiene que ser byte-por-byte idéntico: el header `client`
   // nunca decide.
+  // El segundo reemplazo se detiene en el próximo separador de campo (dos
+  // espacios), no en el literal "  upstream=": la fixture de este test no
+  // trae `route`, así que hoy "cliente=" cae pegado a "  upstream=" y ambas
+  // formas coinciden. Pero si alguien agrega `route` a esta fixture más
+  // adelante, un `.*?` que sólo sabe parar en "  upstream=" se comería
+  // "ruta=..." dentro del placeholder — y el invariante byte-a-byte que este
+  // test protege dejaría de comparar esa parte del texto sin que nadie lo
+  // note. Parar en el separador de campo evita que el placeholder cruce a un
+  // campo vecino sin importar cuál sea.
   const normalizeClient = (text) =>
     text
       .replace(/cliente: .*\n/, 'cliente: <client>\n')
-      .replace(/cliente=.*?  upstream=/, 'cliente=<client>  upstream=');
+      .replace(/cliente=(?:(?!  ).)*/, 'cliente=<client>');
   assert.equal(normalizeClient(run1.stdout), normalizeClient(run2.stdout));
 
   for (const { stdout } of [run1, run2]) {
@@ -578,6 +587,117 @@ test('defecto 10: una fila sin `tools` envenena SÓLO el total de tools, nunca e
   assert.ok(
     stdout.includes('tools: filas=2  tools=-  bytes=150 B'),
     `tools debe ser "-" (b no lo reportó) pero bytes=150 (las dos filas lo reportaron): ${stdout}`,
+  );
+});
+
+// =======================================================================
+// Cobertura adicional (revisión adversarial, ramas de writeRequestDashboard
+// nunca ejercitadas por los tests de arriba) — no son los nueve defectos
+// numerados, pero son la misma disciplina: un valor real que el filtro
+// `present()` deja pasar, o una ausencia que el propio código trata de dos
+// formas DISTINTAS, tienen que quedar fijados en una aserción.
+// =======================================================================
+
+test('dashboard factual: valores falsy REALES (stream=false, 0) sobreviven el filtro present(), nunca se leen como ausentes', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        stream: false,
+        output_tokens: 0,
+        ttft_ms: 0,
+        total_ms: 5,
+        tools_by_server: [{ server: 'srv', kind: 'mcp', tools: 1, bytes: 10 }],
+        context_tools_bytes: 10,
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  // present() sólo rechaza null/undefined — `false` y `0` son hechos
+  // medidos, no ausencias. Una "simplificación" a `if (value)` los borraría
+  // en silencio.
+  assert.ok(stdout.includes('stream=false'), `stream=false real debe imprimirse, no omitirse: ${stdout}`);
+  assert.ok(stdout.includes('output=0'), `output_tokens=0 real debe imprimirse, no omitirse: ${stdout}`);
+  assert.ok(stdout.includes('ttft_ms=0'), `ttft_ms=0 real debe imprimirse, no omitirse: ${stdout}`);
+});
+
+// Lo de abajo documenta el comportamiento ACTUAL, no lo endosa: hay dos
+// formas distintas de decir "no hay dato" en este dashboard, y hoy son
+// inconsistentes entre sí.
+//   - Pares de valor crudo (ttft_ms, total_ms, prepare_us, status, etc.):
+//     ausente -> present() los rechaza -> el par se OMITE de la línea. Si
+//     TODOS los pares de una línea están ausentes, metricLine devuelve ''
+//     y la línea entera desaparece.
+//   - Pares en bytes (system, tools, history, last_turn, other, measured,
+//     el total `bytes`): ausente -> humanizeBytes() devuelve la cadena '-',
+//     que SÍ pasa present() -> el par SIEMPRE se imprime, como `campo=-`.
+// Omisión y '-' son dos maneras distintas de decir "no hay dato"; unificarlas
+// es una decisión abierta, no algo que este test resuelva.
+test('dashboard factual: campo crudo ausente se OMITE de su línea (o hace desaparecer la línea entera); campo en bytes ausente imprime "-"', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        // Deliberadamente SIN ttft_ms/total_ms/prepare_us (los tres pares de
+        // "latencia") ni status (par crudo de "identidad") ni
+        // context_history_bytes (par en bytes de "contexto_bytes").
+        tools_by_server: [{ server: 'srv', kind: 'mcp', tools: 1, bytes: 10 }],
+        context_tools_bytes: 500,
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(
+    !stdout.includes('latencia:'),
+    `sin ttft_ms/total_ms/prepare_us la línea "latencia:" completa debe desaparecer: ${stdout}`,
+  );
+  assert.ok(
+    !stdout.includes('status='),
+    `status ausente debe omitirse de la línea, nunca imprimirse vacío/undefined/NaN: ${stdout}`,
+  );
+  assert.ok(
+    stdout.includes('history=-'),
+    `context_history_bytes ausente debe imprimirse como history=-, nunca omitirse: ${stdout}`,
+  );
+});
+
+test('caveat de filas native NO se imprime cuando también hay una fila mcp real (caso mixto)', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        tools_by_server: [
+          { server: '(native)', kind: 'native', tools: 2, bytes: 80 },
+          { server: 'srv_mcp', kind: 'mcp', tools: 1, bytes: 40, deferred_tools: 0 },
+        ],
+        context_tools_bytes: 120,
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  // Con una fila mcp real presente, los bytes SÍ están atribuidos por
+  // servidor concreto; el caveat de "no hay desglose por MCP" sería falso.
+  assert.ok(
+    !stdout.includes('No hay desglose por MCP en esta fila.'),
+    `caveat no debe aparecer habiendo una fila mcp real junto a la native: ${stdout}`,
   );
 });
 
