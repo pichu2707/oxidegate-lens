@@ -41,10 +41,10 @@ If `feature-branch-chain`: 1a bases on tracker; 1b/1c/1d each base on the prior 
 
 ## Phase 3: `lib/mcp-valve.mjs` (PR 1c)
 
-- [ ] 3.1 RED — `test/mcp-valve.test.mjs`: exact match, sanitized match, collision→`ambiguous`, snapshot-only, **wire-only spend → `unknown` row, never dropped**, **no spend + no price → silence**, `joinHealth:'no-correspondence'` suppresses fleet-wide, `already-off` branch, every named refusal reason.
-- [ ] 3.2 GREEN — implement `buildValveRows({snapshot, usage})`: FULL OUTER JOIN, `joinHealth`, recommendation conjunction. CONTRACT header carries Decision 6 in full (mismatch/0-uses identity, why `unknown` exists).
-- [ ] 3.3 RED — `test/mcp-valve-topology.test.mjs`: static assert `lib/mcp-valve.mjs` and its transitive imports contain no reference to `client.mcp.connect`/`disconnect`/`.status` (Decision 8's firewall as a test, not a header comment).
-- [ ] 3.4 GREEN — confirm module imports only `mcp-snapshot.mjs`, `mcp-usage.mjs`, `sanitizeServerName`; no `client` parameter anywhere in its exported signatures.
+- [x] 3.1 RED — `test/mcp-valve.test.mjs`: exact match, sanitized match, collision→`ambiguous`, snapshot-only, **wire-only spend → `unknown` row, never dropped**, **no spend + no price → silence**, `joinHealth:'no-correspondence'` suppresses fleet-wide, `already-off` branch, every named refusal reason.
+- [x] 3.2 GREEN — implement `buildValveRows({snapshot, usage})`: FULL OUTER JOIN, `joinHealth`, recommendation conjunction. CONTRACT header carries Decision 6 in full (mismatch/0-uses identity, why `unknown` exists).
+- [x] 3.3 RED — `test/mcp-valve-topology.test.mjs`: static assert `lib/mcp-valve.mjs` and its transitive imports contain no reference to `client.mcp.connect`/`disconnect`/`.status` (Decision 8's firewall as a test, not a header comment).
+- [x] 3.4 GREEN — confirm module imports only `mcp-snapshot.mjs`, `mcp-usage.mjs`, `sanitizeServerName`; no `client` parameter anywhere in its exported signatures.
 
 ## Phase 4: Wiring (PR 1d)
 
