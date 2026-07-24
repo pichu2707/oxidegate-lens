@@ -480,7 +480,7 @@ test('defecto 9: con fila native en la tabla, SÍ se imprime la nota sobre filas
 // hedging hacen que sobre-corregir sea el próximo fallo más probable.
 // =======================================================================
 
-test('camino eager (upstream != anthropic): el ahorro se imprime SIN lenguaje de incertidumbre', async () => {
+test('upstream no-anthropic: no usa deferred_tools para concluir carga diferida/inmediata', async () => {
   const mock = await startMockOxideGate({
     requests: [
       baseEntry({
@@ -502,9 +502,9 @@ test('camino eager (upstream != anthropic): el ahorro se imprime SIN lenguaje de
   assert.equal(code, 0);
   assert.ok(
     stdout.includes(
-      'Este dialecto (openai) no tiene primitivo de diferido: no existe una versión\n' +
-        'donde estos bytes sean opcionales, para ningún harness. El costo de arriba es real,\n' +
-        'sin ambigüedad — nada que decidir aquí.',
+      'Este reporte no usa `deferred_tools` para decidir ahorro en tráfico openai:\n' +
+        'la tabla de bytes sólo dice qué filas MCP llegaron en esta petición. No concluye si el\n' +
+        'harness cargó herramientas de forma diferida o inmediata.',
     ),
   );
   for (const hedge of ['no se puede confirmar', 'puede ser que', 'tal vez', 'quizás', 'aviso: algunos harnesses']) {

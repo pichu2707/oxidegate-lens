@@ -367,9 +367,9 @@ async function main() {
     }
     if (!isAnthropic) {
       process.stdout.write(
-        `Este dialecto (${entry.upstream}) no tiene primitivo de diferido: no existe una versión\n` +
-          'donde estos bytes sean opcionales, para ningún harness. El costo de arriba es real,\n' +
-          'sin ambigüedad — nada que decidir aquí.\n',
+        `Este reporte no usa \`deferred_tools\` para decidir ahorro en tráfico ${entry.upstream}:\n` +
+          'la tabla de bytes sólo dice qué filas MCP llegaron en esta petición. No concluye si el\n' +
+          'harness cargó herramientas de forma diferida o inmediata.\n',
       );
     }
   }
