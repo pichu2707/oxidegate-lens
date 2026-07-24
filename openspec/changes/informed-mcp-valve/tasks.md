@@ -48,12 +48,12 @@ If `feature-branch-chain`: 1a bases on tracker; 1b/1c/1d each base on the prior 
 
 ## Phase 4: Wiring (PR 1d)
 
-- [ ] 4.1 RED — extend `test/oxidegate-savings.test.mjs` + `test/helpers/run-savings-cli.mjs` (new `homePath` option, new `test/helpers/fake-snapshot.mjs`) across the 5-row degradation matrix; add `assertNoDroppedSpend` alongside existing `assertNoUnwindowedRecommendation`/`assertNoFabricatedZero`.
-- [ ] 4.2 GREEN — wire the three `lib/` modules into `bin/oxidegate-savings.mjs` section (d). Render the `unknown` row **conspicuously**: its own labeled block adjacent to, but visually distinct from, the per-server table — never a quiet footnote.
-- [ ] 4.3 GREEN — every `candidate to disable` / `0 uses` string MUST carry its observation window in the same sentence; add a render-level assert forbidding a bare `0 uses` or bare `candidate to disable` substring in stdout.
+- [x] 4.1 RED — extend `test/oxidegate-savings.test.mjs` + `test/helpers/run-savings-cli.mjs` (new `homePath` option, new `test/helpers/fake-snapshot.mjs`) across the 5-row degradation matrix; add `assertNoDroppedSpend` alongside existing `assertNoUnwindowedRecommendation`/`assertNoFabricatedZero`.
+- [x] 4.2 GREEN — wire the three `lib/` modules into `bin/oxidegate-savings.mjs` section (d). Render the `unknown` row **conspicuously**: its own labeled block adjacent to, but visually distinct from, the per-server table — never a quiet footnote.
+- [x] 4.3 GREEN — every `candidate to disable` / `0 uses` string MUST carry its observation window in the same sentence; add a render-level assert forbidding a bare `0 uses` or bare `candidate to disable` substring in stdout.
 - [ ] 4.4 GREEN — `opencode/oxidegate-lens.ts`: rename `oxidegate_lens_experimental_mcp_status/_connect/_disconnect` → `oxidegate_lens_mcp_valve/_connect/_disconnect`; `mcp_valve` returns price+usage+window+recommendation+reason via `buildValveRows`; `valveResult`'s `experiment:` key → `caveat:`, `warning` string preserved verbatim.
 - [ ] 4.5 GREEN — delete the outdated "WHAT THIS PLUGIN DOES NOT DO" routing claim (`opencode/oxidegate-lens.ts` header, lines ~11-18); replace with a note that a fetch-patch plugin already routes OpenCode traffic through OxideGate today, and that routing itself stays out of this change's scope.
-- [ ] 4.6 Verify (no code change) — `resolveBaseUrl()` (`OXIDEGATE_LENS_URL` → `OXIDEGATE_PORT` → `8080`) already works for non-default ports; do not hardcode any port in new code.
+- [x] 4.6 Verify (no code change) — `resolveBaseUrl()` (`OXIDEGATE_LENS_URL` → `OXIDEGATE_PORT` → `8080`) already works for non-default ports; do not hardcode any port in new code.
 - [ ] 4.7 Full suite — `node --test test/*.test.mjs` green: 25 existing + all new tests, zero regressions.
 
 ## Phase 5: Cross-repo follow-up (mcp-savings — separate change, not executed here)

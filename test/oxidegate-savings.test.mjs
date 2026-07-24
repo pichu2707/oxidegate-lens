@@ -20,7 +20,14 @@ import { createServer } from 'node:http';
 import assert from 'node:assert/strict';
 import { startMockOxideGate } from './helpers/mock-oxidegate-server.mjs';
 import { makeFakeClaude } from './helpers/fake-claude.mjs';
-import { runSavingsCli, assertNoDeadCausalArtifacts } from './helpers/run-savings-cli.mjs';
+import { makeFakeSnapshot } from './helpers/fake-snapshot.mjs';
+import {
+  runSavingsCli,
+  assertNoDeadCausalArtifacts,
+  assertNoUnwindowedRecommendation,
+  assertNoFabricatedZero,
+  assertNoDroppedSpend,
+} from './helpers/run-savings-cli.mjs';
 
 function baseEntry(overrides = {}) {
   return {
@@ -829,4 +836,278 @@ test('puerto ocupado por otro servicio -> "no es OxideGate", no un error de pars
   } finally {
     intruso.close();
   }
+});
+
+// =======================================================================
+// (d) VALVE INFORMADO MCP — precio (mcp-savings) + uso observado
+// (OxideGate), por servidor. Ver lib/mcp-snapshot.mjs, lib/mcp-usage.mjs y
+// lib/mcp-valve.mjs para el contrato completo (join, joinHealth, la
+// conjunción de recomendación). Estos tests son de nivel CLI: cubren la
+// matriz de degradación de 5 filas de design.md (OxideGate presente/ausente
+// × snapshot fresco/stale/faltante) contra el binario real, y las cuatro
+// disciplinas de honestidad que este bloque no puede violar sin fallar:
+//
+//   A. una fila "unknown" (gasto sin atribuir) es CONSPICUA — bloque propio.
+//   B. toda recomendación de "0 usos" lleva su ventana en la MISMA línea.
+//   C. un snapshot stale marca CADA precio/recomendación que muestra.
+//   D. una medición ausente (`ok:false`) nunca se imprime como 0.
+// =======================================================================
+
+const nativeFiller = { server: '(native)', kind: 'native', tools: 1, bytes: 1 };
+
+/**
+ * Builds a `requests` array (oldest-first, RFC 3339 timestamps), evenly
+ * spaced across `spanMs`, each carrying a `(native)` filler row (so
+ * `newestBreakdown()` always has a usable, non-empty entry — see
+ * bin/oxidegate-savings.mjs) plus whatever `mcpRows` the test wants. The
+ * native filler never counts toward `lib/mcp-usage.mjs`'s `usesByLabel`
+ * (only `kind: 'mcp'` rows do), so it never contaminates a usage count.
+ */
+function requestsWindow({ count, spanMs, mcpRows = [] }) {
+  const now = Date.now();
+  const start = now - spanMs;
+  const step = count > 1 ? spanMs / (count - 1) : 0;
+  return Array.from({ length: count }, (_, i) =>
+    baseEntry({
+      timestamp: new Date(start + step * i).toISOString(),
+      tools_by_server: [nativeFiller, ...mcpRows],
+    }),
+  );
+}
+
+test('valve informado (d) fila 1/5: OxideGate presente + snapshot fresco -> valve completo (precio + uso + recomendación)', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [
+      { server: 'used_server', enabled: true, tokens: 100, bytes: 500, ok: true },
+      { server: 'unused_server', enabled: true, tokens: 200, bytes: 700, ok: true },
+    ],
+  });
+  const requests = requestsWindow({
+    count: 5,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [{ server: 'used_server', kind: 'mcp', tools: 1, bytes: 50 }],
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('used_server'));
+  assert.ok(stdout.includes('unused_server'));
+  assert.ok(stdout.includes('usos observados: 5'), `used_server debe mostrar 5 usos: ${stdout}`);
+  assert.ok(stdout.includes('candidato a desconectar'), `unused_server debe ser candidato: ${stdout}`);
+  assertNoUnwindowedRecommendation(assert, stdout);
+  assertNoFabricatedZero(assert, stdout);
+  assertNoDroppedSpend(assert, stdout, ['used_server']);
+  assertNoDeadCausalArtifacts(assert, stdout);
+});
+
+test('valve informado (d) fila 2/5: snapshot DESACTUALIZADO -> precio y recomendación marcados como stale en la MISMA línea', async () => {
+  const claude = await knownZeroClaude();
+  const staleTimestamp = Date.now() - 30 * 60 * 60 * 1000; // 30h > el umbral de 24h
+  const snap = await makeFakeSnapshot({
+    timestamp: staleTimestamp,
+    mcpMeasurement: [{ server: 'unused_server', enabled: true, tokens: 200, bytes: 700, ok: true }],
+  });
+  const requests = requestsWindow({ count: 5, spanMs: 45 * 60 * 1000, mcpRows: [] });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  const isoStamp = new Date(staleTimestamp).toISOString();
+  assert.ok(stdout.includes(isoStamp), `debe citar el timestamp original del snapshot: ${stdout}`);
+  assert.ok(stdout.includes('DESACTUALIZADO'));
+
+  const lines = stdout.split('\n');
+  const serverLine = lines.find((l) => l.includes('unused_server') && l.includes('precio='));
+  assert.ok(serverLine, 'debe haber una fila para unused_server');
+  assert.ok(
+    serverLine.includes('DESACTUALIZADO'),
+    `el precio mostrado debe marcarse stale en la MISMA línea: ${serverLine}`,
+  );
+
+  const candidateLines = lines.filter((l) => l.includes('candidato a desconectar'));
+  assert.ok(candidateLines.length > 0, 'este fixture debe producir al menos una recomendación candidata');
+  for (const line of candidateLines) {
+    assert.ok(
+      line.includes('DESACTUALIZADO'),
+      `una recomendación basada en un snapshot stale DEBE marcarlo en la MISMA línea: ${line}`,
+    );
+  }
+  assertNoUnwindowedRecommendation(assert, stdout);
+});
+
+test('valve informado (d) fila 3/5: OxideGate presente + snapshot faltante/malformado -> sólo filas "unknown", pista de instalación, nunca precio inventado', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({ malformed: true });
+  const requests = requestsWindow({
+    count: 5,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [{ server: 'mystery_server', kind: 'mcp', tools: 1, bytes: 30 }],
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('el snapshot tiene JSON inválido'), `debe nombrar la razón real: ${stdout}`);
+  assert.ok(stdout.includes('GASTO SIN ATRIBUIR'));
+  assert.ok(stdout.includes('mystery_server'));
+  assertNoDroppedSpend(assert, stdout, ['mystery_server']);
+  assertNoFabricatedZero(assert, stdout);
+  assertNoDeadCausalArtifacts(assert, stdout);
+});
+
+test('valve informado (d) fila 4/5: observación insuficiente + snapshot fresco -> precio se muestra, SIN recomendación (razón nombrada)', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [{ server: 'quiet_server', enabled: true, tokens: 50, bytes: 400, ok: true }],
+  });
+  // Sólo 2 peticiones en 5 minutos: falla AMBOS gates de suficiencia
+  // (ventana >= 30min Y conteo >= 5) — ver lib/mcp-usage.mjs.
+  const requests = requestsWindow({ count: 2, spanMs: 5 * 60 * 1000, mcpRows: [] });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('quiet_server'));
+  assert.ok(stdout.includes('400 B'));
+  assert.ok(
+    !stdout.includes('candidato a desconectar'),
+    'sin observación suficiente no debe recomendar nada, ni siquiera un "0 usos" real',
+  );
+  assert.ok(
+    stdout.includes('todavía no hay suficiente observación para juzgar uso') ||
+      stdout.includes('observación insuficiente'),
+    `debe nombrar la razón de la ausencia de recomendación: ${stdout}`,
+  );
+  assertNoUnwindowedRecommendation(assert, stdout);
+  assertNoFabricatedZero(assert, stdout);
+});
+
+test('valve informado (d) fila 5/5: sin snapshot y sin observación suficiente -> cero filas, un aviso, nunca un crash', async () => {
+  const claude = await knownZeroClaude();
+  const requests = requestsWindow({ count: 1, spanMs: 0, mcpRows: [] });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('no hay datos de valve'), `debe decir explícitamente que no hay datos: ${stdout}`);
+  assertNoDeadCausalArtifacts(assert, stdout);
+});
+
+test('valve informado (d): el gasto "unknown" es CONSPICUO — bloque propio, nunca confundido con la tabla por-servidor', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [{ server: 'known_server', enabled: true, tokens: 10, bytes: 100, ok: true }],
+  });
+  const requests = requestsWindow({
+    count: 5,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [
+      { server: 'known_server', kind: 'mcp', tools: 1, bytes: 20 },
+      { server: 'ghost_server', kind: 'mcp', tools: 1, bytes: 15 },
+    ],
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  const lines = stdout.split('\n');
+  // ghost_server is a REAL `kind: 'mcp'` row on the wire, so it legitimately
+  // also appears in section (a)'s byte table (which lists every wire row,
+  // unrelated to the snapshot join). Only section (d) — the informed
+  // valve — is under test here, so every index below is scoped to AFTER
+  // that section's own header, never the whole stdout.
+  const sectionDStartIdx = lines.findIndex((l) => l.includes('valve informado MCP'));
+  assert.ok(sectionDStartIdx > -1, 'debe existir la sección (d)');
+
+  const unknownHeaderIdx = lines.findIndex((l, i) => i > sectionDStartIdx && l.includes('GASTO SIN ATRIBUIR'));
+  assert.ok(unknownHeaderIdx > -1, 'debe existir un bloque propio para gasto sin atribuir');
+
+  const ghostLineIdx = lines.findIndex((l, i) => i > sectionDStartIdx && l.includes('ghost_server'));
+  assert.ok(
+    ghostLineIdx > unknownHeaderIdx,
+    'ghost_server (sin entrada de snapshot), DENTRO de la sección (d), debe estar DENTRO del bloque "unknown", no antes',
+  );
+
+  const knownServerLine = lines.find((l, i) => i > sectionDStartIdx && l.includes('known_server') && l.includes('['));
+  assert.ok(knownServerLine, 'known_server (con snapshot) debe seguir en la tabla por-servidor normal');
+  const knownServerIdx = lines.indexOf(knownServerLine);
+  assert.ok(
+    knownServerIdx < unknownHeaderIdx,
+    'la fila con snapshot debe estar ANTES del bloque "unknown", nunca mezclada dentro de él',
+  );
+  assertNoDroppedSpend(assert, stdout, ['ghost_server', 'known_server']);
+});
+
+test('valve informado (d): precio "no se pudo medir" (ok:false, bytes:0) nunca se imprime como 0 B — ausencia no es cero', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [{ server: 'broken_server', enabled: true, tokens: null, bytes: 0, ok: false }],
+  });
+  const requests = requestsWindow({
+    count: 5,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [{ server: 'broken_server', kind: 'mcp', tools: 1, bytes: 5 }],
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  const line = stdout.split('\n').find((l) => l.includes('broken_server') && l.includes('precio='));
+  assert.ok(line, 'debe haber una fila para broken_server');
+  assert.ok(line.includes('no se pudo medir'), `precio ok:false debe decir "no se pudo medir": ${line}`);
+  assert.ok(!line.includes('0 B'), `precio ok:false NUNCA debe imprimirse como 0 B: ${line}`);
+  assertNoFabricatedZero(assert, stdout);
 });
