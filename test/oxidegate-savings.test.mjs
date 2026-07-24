@@ -478,6 +478,110 @@ test('defecto 9: con fila native en la tabla, SÍ se imprime la nota sobre filas
 });
 
 // =======================================================================
+// Defecto #10 — ausente ≠ cero, en TOTALES: la línea `tools:` del
+// dashboard sumaba `tools_by_server` con `?? 0`, que convierte un campo
+// AUSENTE en una fila (nadie reportó ese dato) en el mismo cero que un
+// campo genuinamente medido en cero. El mismo criterio que ya aplican
+// `humanizeBytes()` y `classifyRowContext` campo a campo se extiende aquí: CERO
+// FILAS es un cero real y conocido (no hay nada ni nadie de quien
+// callarse); pero UNA fila que no trae el campo es SILENCIO sobre esa
+// fila puntual, y ese silencio envenena SÓLO el total de ESE campo — el
+// otro total, y el resto del dashboard, siguen intactos.
+//
+// La fila con `tools_by_server: []` genuinamente vacío es, hoy,
+// inalcanzable a través de la CLI real: `newestBreakdown()` (más arriba
+// en este archivo) ya descarta cualquier entry con `tools_by_server`
+// vacío ANTES de llegar a `writeRequestDashboard` — ver su propio
+// comentario ("no es una fuente usable, se salta en vez de reportarse
+// como 'cero servidores'"). Por eso no hay aquí un test de "0 filas
+// reales" contra el binario: sería un test que no puede fallar ni pasar
+// por la vía pública, y este archivo no fabrica escenarios que no puede
+// producir de verdad. Lo que SÍ es alcanzable — y es lo que importa para
+// el defecto real — es que una suma de valores PRESENTES en 0 se siga
+// imprimiendo como 0, nunca como '-'; y que una fila sin el campo
+// envenene sólo ESE total, nunca el otro. Eso es lo que prueban los tres
+// tests de abajo.
+// =======================================================================
+
+test('defecto 10: fila con tools=0 y bytes=0 presentes -> total real 0, nunca "-"', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        tools_by_server: [{ server: 'vacio', kind: 'mcp', tools: 0, bytes: 0 }],
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(
+    stdout.includes('tools: filas=1  tools=0  bytes=0 B'),
+    `un 0 medido de verdad debe imprimirse como 0, no como "-": ${stdout}`,
+  );
+});
+
+test('defecto 10: una fila sin `bytes` envenena SÓLO el total de bytes, nunca el de tools', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        tools_by_server: [
+          { server: 'a', kind: 'mcp', tools: 5, bytes: 100 },
+          { server: 'b', kind: 'mcp', tools: 3 }, // sin bytes: silencio, no cero
+        ],
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(
+    stdout.includes('tools: filas=2  tools=8  bytes=-'),
+    `bytes debe ser "-" (b no lo reportó) pero tools=8 (las dos filas lo reportaron): ${stdout}`,
+  );
+  // El bug real: imprimir la suma PARCIAL (100, sólo lo que reportó `a`) como
+  // si fuera el total medido de las dos filas.
+  assert.ok(
+    !stdout.includes('bytes=100 B'),
+    'no debe imprimir la suma parcial (100) como si fuera el total de bytes',
+  );
+});
+
+test('defecto 10: una fila sin `tools` envenena SÓLO el total de tools, nunca el de bytes', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        tools_by_server: [
+          { server: 'a', kind: 'mcp', tools: 5, bytes: 100 },
+          { server: 'b', kind: 'mcp', bytes: 50 }, // sin tools: silencio, no cero
+        ],
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(
+    stdout.includes('tools: filas=2  tools=-  bytes=150 B'),
+    `tools debe ser "-" (b no lo reportó) pero bytes=150 (las dos filas lo reportaron): ${stdout}`,
+  );
+});
+
+// =======================================================================
 // Protección adicional (no un defecto pasado, uno esperando pasar): el
 // camino "harness eager" (upstream !== 'anthropic') tiene que seguir
 // diciendo el ahorro DIRECTO y sin cobertura de duda — nueve rondas de

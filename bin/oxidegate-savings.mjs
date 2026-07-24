@@ -165,10 +165,30 @@ function humanizeRatio(ratio) {
   return `${(ratio * 100).toFixed(2)}%`;
 }
 
+/**
+ * Sums `rows[i][key]` — but refuses to sum at all if ANY row is silent about
+ * that field (missing, non-numeric, or NaN). Same discipline as
+ * `humanizeBytes()` and `classifyRowContext` applied to a TOTAL instead of a single
+ * cell: a total built from `?? 0` turns "this row never said" into "this row
+ * said zero", and the printed sum then reads as measured when it is really
+ * partial. Zero ROWS is a different thing entirely — nobody was silent,
+ * there is nothing to sum — so an empty `rows` correctly returns a real `0`,
+ * not `null`. One missing field poisons only the total for THAT key.
+ */
+function sumOrUnknown(rows, key) {
+  let sum = 0;
+  for (const r of rows) {
+    const value = r[key];
+    if (typeof value !== 'number' || Number.isNaN(value)) return null;
+    sum += value;
+  }
+  return sum;
+}
+
 function writeRequestDashboard(entry) {
   const rows = entry.tools_by_server ?? [];
-  const totalTools = rows.reduce((sum, r) => sum + (r.tools ?? 0), 0);
-  const totalToolBytes = rows.reduce((sum, r) => sum + (r.bytes ?? 0), 0);
+  const totalTools = sumOrUnknown(rows, 'tools');
+  const totalToolBytes = sumOrUnknown(rows, 'bytes');
   const nativeRows = rows.filter((r) => r.kind === 'native');
   const mcpRows = rows.filter((r) => r.kind === 'mcp');
 
@@ -206,7 +226,7 @@ function writeRequestDashboard(entry) {
   process.stdout.write(
     metricLine('tools', [
       ['filas', rows.length],
-      ['tools', totalTools],
+      ['tools', totalTools ?? '-'],
       ['bytes', humanizeBytes(totalToolBytes)],
       ['overhead', humanizeBytes(entry.tools_overhead_bytes)],
     ]),
