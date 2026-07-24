@@ -175,11 +175,15 @@ test('defectos 3 y 4: mismo entry con dos `client` distintos -> tabla y veredict
   assert.equal(run2.code, 0);
 
   // Sólo la primera línea ("fuente: ... cliente: ...") puede diferir
-  // legítimamente. Todo lo demás — tabla, veredictos, texto de ausencia —
-  // tiene que ser byte-por-byte idéntico: el header `client` nunca decide.
-  const [, ...rest1] = run1.stdout.split('\n');
-  const [, ...rest2] = run2.stdout.split('\n');
-  assert.equal(rest1.join('\n'), rest2.join('\n'));
+  // legítimamente. El dashboard factual también imprime `client`; se
+  // normaliza ese valor y todo lo demás — tabla, veredictos, texto de
+  // ausencia — tiene que ser byte-por-byte idéntico: el header `client`
+  // nunca decide.
+  const normalizeClient = (text) =>
+    text
+      .replace(/cliente: .*\n/, 'cliente: <client>\n')
+      .replace(/cliente=.*?  upstream=/, 'cliente=<client>  upstream=');
+  assert.equal(normalizeClient(run1.stdout), normalizeClient(run2.stdout));
 
   for (const { stdout } of [run1, run2]) {
     // Ausencia: se nombran las DOS causas posibles, ninguna elegida.
@@ -513,6 +517,71 @@ test('upstream no-anthropic: no usa deferred_tools para concluir carga diferida/
   // Los bloques (b) y (c) son exclusivos de anthropic: no deben aparecer.
   assert.ok(!stdout.includes('servidor(es) MCP disponibles'));
   assert.ok(!stdout.includes('tokens de contexto'));
+  assertNoDeadCausalArtifacts(assert, stdout);
+});
+
+test('pi/Codex: imprime dashboard factual desde /requests sin atribución MCP ni verdad de carga', async () => {
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        client: 'pi (linux 6.19.13+parrot7-amd64; x64)',
+        route: '/v1/codex/responses',
+        upstream: 'codex',
+        status: 200,
+        model: 'gpt-5.5',
+        stream: true,
+        input_tokens: 20192,
+        output_tokens: 6,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        context_system_bytes: 31267,
+        context_tools_bytes: 72570,
+        context_history_bytes: 0,
+        context_last_turn_bytes: 71,
+        context_other_bytes: 152,
+        context_measured_bytes: 104060,
+        context_messages_count: 1,
+        context_tax_ratio: 0.9978570055737075,
+        tools_by_server: [{ server: '(native)', kind: 'native', tools: 46, bytes: 72523, deferred_tools: 0 }],
+        tools_overhead_bytes: 47,
+        ttft_ms: 4322,
+        total_ms: 4895,
+        prepare_us: 4648,
+      }),
+    ],
+    // Deliberately different aggregate data: request-level dashboard must not
+    // borrow facts from /stats, which can include unrelated concurrent traffic.
+    stats: [{ upstream: 'codex', model: 'gpt-5.5', requests: 999 }],
+  });
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: null });
+  await mock.close();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('petición reciente (/requests, no /stats):'));
+  assert.ok(stdout.includes('cliente=pi (linux 6.19.13+parrot7-amd64; x64)'));
+  assert.ok(stdout.includes('ruta=/v1/codex/responses'));
+  assert.ok(stdout.includes('upstream=codex'));
+  assert.ok(stdout.includes('modelo=gpt-5.5'));
+  assert.ok(stdout.includes('status=200'));
+  assert.ok(stdout.includes('stream=true'));
+  assert.ok(stdout.includes('input=20192'));
+  assert.ok(stdout.includes('output=6'));
+  assert.ok(stdout.includes('cache_read=0'));
+  assert.ok(stdout.includes('system=31.3 kB'));
+  assert.ok(stdout.includes('tools=72.6 kB'));
+  assert.ok(stdout.includes('measured=104.1 kB'));
+  assert.ok(stdout.includes('messages=1'));
+  assert.ok(stdout.includes('tax_ratio=99.79%'));
+  assert.ok(stdout.includes('tools: filas=1  tools=46  bytes=72.5 kB  overhead=47 B'));
+  assert.ok(stdout.includes('latencia: ttft_ms=4322  total_ms=4895  prepare_us=4648'));
+  assert.ok(stdout.includes('no trae filas MCP individuales'));
+  assert.ok(stdout.includes('no atribuyen bytes'));
+  assert.ok(stdout.includes('No hay desglose por MCP en esta fila.'));
+  assert.ok(stdout.includes('no hay servidores MCP en esta petición: nada que quitar en bytes.'));
+  assert.ok(!stdout.includes('ya re-enviados en 999'), 'no debe usar /stats para el dashboard pi');
+  assert.ok(!stdout.includes('tokens de contexto'), 'Codex/pi no debe imprimir verdad de deferred_tools como contexto');
+  assert.ok(!stdout.toLowerCase().includes('eager'), 'no debe concluir carga eager para pi/Codex');
+  assert.ok(!stdout.toLowerCase().includes('lazy'), 'no debe concluir carga lazy para pi/Codex');
   assertNoDeadCausalArtifacts(assert, stdout);
 });
 

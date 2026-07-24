@@ -150,6 +150,85 @@ function pad(value, width, align = 'left') {
   return align === 'right' ? filler + text : text + filler;
 }
 
+function present(value) {
+  return value !== null && value !== undefined;
+}
+
+function metricLine(label, pairs) {
+  const facts = pairs.filter(([, value]) => present(value));
+  if (facts.length === 0) return '';
+  return `  ${label}: ${facts.map(([k, v]) => `${k}=${v}`).join('  ')}\n`;
+}
+
+function humanizeRatio(ratio) {
+  if (!present(ratio) || Number.isNaN(ratio)) return null;
+  return `${(ratio * 100).toFixed(2)}%`;
+}
+
+function writeRequestDashboard(entry) {
+  const rows = entry.tools_by_server ?? [];
+  const totalTools = rows.reduce((sum, r) => sum + (r.tools ?? 0), 0);
+  const totalToolBytes = rows.reduce((sum, r) => sum + (r.bytes ?? 0), 0);
+  const nativeRows = rows.filter((r) => r.kind === 'native');
+  const mcpRows = rows.filter((r) => r.kind === 'mcp');
+
+  process.stdout.write('petición reciente (/requests, no /stats):\n');
+  process.stdout.write(
+    metricLine('identidad', [
+      ['cliente', entry.client ?? 'desconocido'],
+      ['ruta', entry.route],
+      ['upstream', entry.upstream],
+      ['modelo', entry.model],
+      ['status', entry.status],
+      ['stream', entry.stream],
+    ]),
+  );
+  process.stdout.write(
+    metricLine('tokens', [
+      ['input', entry.input_tokens],
+      ['output', entry.output_tokens],
+      ['cache_read', entry.cache_read_tokens],
+      ['cache_write', entry.cache_write_tokens],
+    ]),
+  );
+  process.stdout.write(
+    metricLine('contexto_bytes', [
+      ['system', humanizeBytes(entry.context_system_bytes)],
+      ['tools', humanizeBytes(entry.context_tools_bytes)],
+      ['history', humanizeBytes(entry.context_history_bytes)],
+      ['last_turn', humanizeBytes(entry.context_last_turn_bytes)],
+      ['other', humanizeBytes(entry.context_other_bytes)],
+      ['measured', humanizeBytes(entry.context_measured_bytes)],
+      ['messages', entry.context_messages_count],
+      ['tax_ratio', humanizeRatio(entry.context_tax_ratio)],
+    ]),
+  );
+  process.stdout.write(
+    metricLine('tools', [
+      ['filas', rows.length],
+      ['tools', totalTools],
+      ['bytes', humanizeBytes(totalToolBytes)],
+      ['overhead', humanizeBytes(entry.tools_overhead_bytes)],
+    ]),
+  );
+  process.stdout.write(
+    metricLine('latencia', [
+      ['ttft_ms', entry.ttft_ms],
+      ['total_ms', entry.total_ms],
+      ['prepare_us', entry.prepare_us],
+    ]),
+  );
+
+  if (nativeRows.length > 0 && mcpRows.length === 0) {
+    process.stdout.write(
+      '  caveat: esta petición no trae filas MCP individuales en tools_by_server; las filas\n' +
+        '  `(native)` no atribuyen bytes a servidores MCP concretos. No hay desglose por MCP en esta fila.\n',
+    );
+  }
+
+  process.stdout.write('\n');
+}
+
 async function getJson(baseUrl, path) {
   const res = await fetch(`${baseUrl}${path}`, {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -311,6 +390,8 @@ async function main() {
     `fuente: ${entry.timestamp ?? '-'}  ${entry.model ?? '-'}  (${entry.upstream ?? '-'})` +
       `  cliente: ${entry.client ?? 'desconocido'}\n\n`,
   );
+
+  writeRequestDashboard(entry);
 
   // ---------------------------------------------------------------------
   // (a) THE TABLE — bytes. mcp is ALWAYS "sí, desconectándolo": its row
