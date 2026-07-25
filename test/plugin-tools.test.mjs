@@ -68,3 +68,46 @@ test('valveResult no longer carries a stale "experiment:" key; "caveat:" is pres
 test('the warning string is preserved verbatim', () => {
   assert.ok(source.includes(WARNING_TEXT), 'warning string must be present verbatim — a reword must fail this test');
 });
+
+// =======================================================================
+// STATIC guards for the MCP notice wiring.
+//
+// design.md Decision 1 says the plugin is a THIN ADAPTER over lib/*.mjs,
+// because a .ts file cannot run under this repo's `node --test` over .mjs.
+// That decision is only worth anything if something notices when logic
+// starts leaking back into the plugin — so these assertions watch the two
+// ways it would: reimplementing the protection filter inline, and dropping
+// the lib imports.
+// =======================================================================
+
+test('the notice wiring delegates to lib/ instead of reimplementing it', () => {
+  for (const mod of ['mcp-protection.mjs', 'mcp-transitions.mjs', 'mcp-notices.mjs']) {
+    assert.ok(source.includes(`../lib/${mod}`), `el plugin debe importar lib/${mod}, no reimplementarlo`);
+  }
+  for (const fn of ['planMcpDisable', 'partitionByConnected', 'diffMcpStatus', 'startupNotice', 'transitionNotice']) {
+    assert.ok(source.includes(fn), `el plugin debe llamar a ${fn}`);
+  }
+});
+
+test('the inline allowlist filter is gone — the protection decision has ONE home', () => {
+  // The old code did `servers.filter((s) => !allowlist.has(s))` right here.
+  // Leaving that in alongside lib/mcp-protection.mjs would mean two
+  // implementations of "what may be disconnected", and only one of them is
+  // the one with the refusal guard and the tests.
+  assert.ok(!/allowlist\.has\(/.test(source), 'la decisión de qué desconectar no puede vivir también en el plugin');
+  assert.ok(!/function envList\(/.test(source), 'envList quedó muerto al mover la precedencia a lib/');
+});
+
+test('a refusal is never silent — the plugin warns AND notifies', () => {
+  assert.ok(source.includes("plan.action === 'refuse'"), 'el plugin debe ramificar sobre la negativa del plan');
+  const refusalBlock = source.slice(source.indexOf("plan.action === 'refuse'"), source.indexOf("plan.action === 'refuse'") + 700);
+  assert.ok(refusalBlock.includes('console.warn'), 'una negativa debe llegar a stderr, no solo a un toast que puede no existir');
+  assert.ok(refusalBlock.includes('startupNotice'), 'y también al usuario, que es quien puede arreglar el config');
+  assert.ok(refusalBlock.includes('return'), 'tras rehusar no puede seguir hacia el bloque que desconecta');
+});
+
+test('transitions ride session.idle, since no MCP event exists to subscribe to', () => {
+  assert.ok(source.includes('event:'), 'el plugin debe registrar el hook event');
+  assert.ok(source.includes("'session.idle'"), 'el sondeo debe colgar de un evento que SÍ se emite');
+  assert.ok(source.includes('pollMcpTransitions'), 'y llamar al sondeo desde ahí');
+});
