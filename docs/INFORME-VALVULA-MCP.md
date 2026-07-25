@@ -501,6 +501,17 @@ respuesta, en vez de componer dos mentalmente. Precedencia completa:
 variables de entorno  >  proyecto (si está aprobado)  >  global  >  por defecto
 ```
 
+```mermaid
+flowchart TD
+    A["¿Hay variable de entorno?"] -->|"sí"| AE["Gana la variable"]
+    A -->|"no"| B["¿Hay .oxidegate-lens.json?"]
+    B -->|"no"| G["Gana la config global"]
+    B -->|"sí"| C{"¿El HASH de su contenido<br/>está aprobado?"}
+    C -->|"no"| P["PENDIENTE — no se aplica,<br/>y se avisa con el hash"]
+    C -->|"sí"| PR["Gana el proyecto,<br/>REEMPLAZANDO lo global"]
+    P --> G
+```
+
 Y **no se aplica hasta aprobarlo**. Un fichero de configuración dentro de un
 repositorio clonado es **código ajeno**: puede desconectar servidores MCP que
 querías conservar, o —peor, porque es silencioso— marcar como protegido uno
@@ -633,6 +644,16 @@ La tercera fila es justo el fallo que temían, y no puede ocurrir.
 pedía a OxideGate una respuesta que no tiene datos para dar.** No tiene el
 snapshot. Cada instrumento sabe la mitad, y la solución exige a los dos.
 
+```mermaid
+flowchart LR
+    W["Cable aplanado<br/>(native): 40 tools"] --> N["OxideGate publica<br/>los NOMBRES<br/>sin deducir nada"]
+    S["snapshot de mcp-savings<br/>engram: mem_search, mem_save…<br/>context7: query-docs…"] --> L
+    N --> L["oxidegate-lens<br/>CRUZA nombre contra lista"]
+    L --> R1["mem_search → engram"]
+    L --> R2["query-docs → context7"]
+    L --> R3["delegation_list → nadie<br/>sigue siendo nativa"]
+```
+
 ### El campo existe en OxideGate — pero todavía no en ningún release
 
 OxideGate aceptó la propuesta. El campo existe:
@@ -701,6 +722,16 @@ fila de la tabla de arriba, comprobada.
 ---
 
 ## 12. Lo que queda abierto
+
+```mermaid
+flowchart LR
+    A["mcp-savings<br/>mide el precio"] -->|"✔ funciona"| B["oxidegate-lens"]
+    C["OxideGate main<br/>tiene tool_names"] -->|"✖ sin publicar"| D["OxideGate 0.3.1<br/>instalado"]
+    D -->|"✔ pero SIN tool_names"| B
+    B -->|"✔ listo"| E["cruce implementado<br/>y testeado"]
+    E -->|"esperando el release"| F["atribución por servidor<br/>en rutas aplanadas"]
+```
+
 
 | # | Asunto | Estado |
 |---|---|---|
