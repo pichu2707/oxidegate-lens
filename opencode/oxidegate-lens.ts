@@ -43,6 +43,9 @@ import { unwrapSdkResponse } from '../lib/sdk-response.mjs';
 import { readMcpSavingsSnapshot } from '../lib/mcp-snapshot.mjs';
 import { observeMcpUsage } from '../lib/mcp-usage.mjs';
 import { buildValveRows } from '../lib/mcp-valve.mjs';
+import { readProtectedServers, planMcpDisable } from '../lib/mcp-protection.mjs';
+import { diffMcpStatus, partitionByConnected } from '../lib/mcp-transitions.mjs';
+import { startupNotice, transitionNotice } from '../lib/mcp-notices.mjs';
 
 // OxideGate's own default. Kept deliberately in sync with it — but 8080 is a
 // crowded port (Apache, Tomcat, Jenkins all squat it), so if OxideGate is
@@ -52,7 +55,8 @@ const DEFAULT_PORT = 8080;
 const FETCH_TIMEOUT_MS = 300;
 
 const MCP_DISABLE_BY_DEFAULT_ENV = 'OXIDEGATE_MCP_DISABLE_BY_DEFAULT';
-const MCP_ALLOWLIST_ENV = 'OXIDEGATE_MCP_ALLOWLIST';
+// OXIDEGATE_MCP_ALLOWLIST is still honoured, but its name and precedence
+// now live in lib/mcp-protection.mjs, where they are testable.
 const DEBUG_ENV = 'OXIDEGATE_LENS_DEBUG';
 
 function resolveBaseUrl(): string {
@@ -159,65 +163,137 @@ async function showMcpStatusToast(client: any, directory: string | undefined, st
   }
 }
 
-function envList(name: string): Set<string> {
-  return new Set(
-    (process.env[name] ?? '')
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean),
-  );
+/**
+ * Shows a notice composed by `lib/mcp-notices.mjs`. A `null` notice is the
+ * common case and means "nothing happened worth interrupting for" — the
+ * silence is decided there, not here, so this adapter stays dumb.
+ */
+async function showNotice(
+  client: any,
+  directory: string | undefined,
+  notice: { title: string; message: string; variant: string } | null,
+): Promise<void> {
+  if (!notice) return;
+  const showToast = client?.tui?.showToast;
+  if (typeof showToast !== 'function') {
+    // No TUI to speak into. A refusal is a safety event, so it still reaches
+    // stderr rather than evaporating with the toast surface.
+    if (notice.variant === 'warning') console.warn(`[oxidegate-lens] ${notice.message}`);
+    return;
+  }
+
+  try {
+    await showToast({
+      body: {
+        title: notice.title,
+        message: notice.message,
+        variant: notice.variant,
+        duration: notice.variant === 'warning' ? 10000 : 5000,
+      },
+      query: directory ? { directory } : undefined,
+    });
+  } catch {
+    // Best-effort, same as showMcpStatusToast: older builds may not expose it.
+  }
 }
 
+/**
+ * Last MCP status this process observed, for `pollMcpTransitions`.
+ * `undefined` means "we have not looked yet", which is NOT the same as "no
+ * servers" — `diffMcpStatus` treats it as a baseline and reports nothing.
+ */
+let lastKnownMcpStatus: unknown;
+
+/**
+ * The disable-by-default pass, and the notice that tells the user it happened.
+ *
+ * Thin by design (design.md Decision 1): every judgement here — which servers
+ * are protected, whether it is safe to act, what to say — comes from
+ * `lib/*.mjs`, which the suite can actually execute. This function reads the
+ * SDK, calls those, and shows a toast.
+ */
 async function disableMcpServersByDefault(client: any, directory: string | undefined): Promise<void> {
   if (!envFlagEnabled(MCP_DISABLE_BY_DEFAULT_ENV)) return;
 
-  const allowlist = envList(MCP_ALLOWLIST_ENV);
   const query = directory ? { directory } : undefined;
   try {
     const status = unwrapSdkResponse(await client.mcp.status({ query }));
+    lastKnownMcpStatus = status;
     const servers = mcpServerNames(status);
-    const serversToDisable = servers.filter((server) => !allowlist.has(server));
-    const preserved = servers.filter((server) => allowlist.has(server));
-    if (servers.length === 0) {
-      debugLog('[oxidegate-lens] MCP disabled-by-default enabled; no MCP servers found');
-      return;
-    }
+    const protection = readProtectedServers({});
+    const plan = planMcpDisable({ servers, protection });
 
-    if (serversToDisable.length === 0) {
-      debugLog(
-        `[oxidegate-lens] MCP disabled-by-default enabled; disabled=- preserved=${preserved.join(', ') || '-'}`,
+    // A refusal means we could not read what the user protected. Disconnect
+    // nothing and say so loudly — silence would leave them believing their
+    // configuration applied. See lib/mcp-protection.mjs.
+    if (plan.action === 'refuse') {
+      console.warn(
+        `[oxidegate-lens] MCP disabled-by-default refused: protection unreadable (${plan.protectionReason}); nothing disconnected`,
       );
+      await showNotice(client, directory, startupNotice({ partition: partitionByConnected(status), plan }));
       return;
     }
 
-    const results = await Promise.allSettled(
-      serversToDisable.map(async (server) => {
-        await client.mcp.disconnect({
-          path: { name: server },
-          query,
-        });
-        return server;
-      }),
-    );
-
-    const disabled = results
-      .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
-      .map((r) => r.value);
-    const failed = results
-      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-      .map((r) => formatError(r.reason));
+    let disabled: string[] = [];
+    let failed: string[] = [];
+    if (plan.action === 'disable') {
+      const results = await Promise.allSettled(
+        plan.targets.map(async (server: string) => {
+          await client.mcp.disconnect({ path: { name: server }, query });
+          return server;
+        }),
+      );
+      disabled = results
+        .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
+        .map((r) => r.value);
+      failed = results
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => formatError(r.reason));
+    }
 
     debugLog(
-      `[oxidegate-lens] MCP disabled-by-default enabled; disabled=${disabled.join(', ') || '-'} preserved=${
-        preserved.join(', ') || '-'
-      }${
+      `[oxidegate-lens] MCP disabled-by-default enabled; action=${plan.action} disabled=${
+        disabled.join(', ') || '-'
+      } preserved=${plan.preserved.join(', ') || '-'} protectionSource=${protection.source}${
         failed.length ? ` failed=${failed.join(' | ')}` : ''
       }`,
     );
+
+    // Re-read rather than assume: a disconnect that failed must not be
+    // reported as a server that is off.
     const afterStatus = unwrapSdkResponse(await client.mcp.status({ query }));
-    await showMcpStatusToast(client, directory, afterStatus);
+    lastKnownMcpStatus = afterStatus;
+    await showNotice(client, directory, startupNotice({ partition: partitionByConnected(afterStatus), plan }));
   } catch (error) {
     console.warn(`[oxidegate-lens] MCP disabled-by-default failed: ${formatError(error)}`);
+  }
+}
+
+/**
+ * Reads the MCP status and reports what moved since the last reading.
+ *
+ * OpenCode emits NO MCP event — the SDK's `Event` union has 32 members and
+ * none is MCP-shaped — so there is nothing to subscribe to and polling is the
+ * only way to notice a connection we did not cause ourselves. This runs off
+ * events that DO fire (`session.idle`), so it costs one status call per idle
+ * rather than a timer that keeps ticking in an abandoned session.
+ *
+ * The consequence is honest and worth stating: a notice arrives at the next
+ * idle, never at the instant of the connection.
+ */
+async function pollMcpTransitions(client: any, directory: string | undefined): Promise<void> {
+  const query = directory ? { directory } : undefined;
+  try {
+    const status = unwrapSdkResponse(await client.mcp.status({ query }));
+    const diff = diffMcpStatus(lastKnownMcpStatus, status);
+    // Store even when the diff was unreadable-or-baseline, so the NEXT poll
+    // has something to compare against.
+    lastKnownMcpStatus = status;
+    await showNotice(client, directory, transitionNotice(diff));
+  } catch (error) {
+    // A failed poll is not a state change. Stay quiet at debug level rather
+    // than warn on every idle of a session with no MCP support at all.
+    debugLog(`[oxidegate-lens] MCP transition poll failed: ${formatError(error)}`);
   }
 }
 
@@ -344,6 +420,16 @@ export async function OxidegateLens({ project, client, $, directory, worktree }:
   void disableMcpServersByDefault(client, directory);
 
   return {
+    // There is no MCP event to subscribe to, so we ride one that exists.
+    // `session.idle` fires when the agent stops working — the moment a poll
+    // is cheapest and a toast is least intrusive. Any connection made since
+    // the last idle surfaces here; nothing surfaces at the instant it
+    // happens, and lib/mcp-transitions.mjs's baseline rule keeps the first
+    // reading from firing a burst of false notices.
+    event: async ({ event }: any) => {
+      if (event?.type !== 'session.idle') return;
+      await pollMcpTransitions(client, directory);
+    },
     ...(openCodeTool
       ? {
           tool: {
