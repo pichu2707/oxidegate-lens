@@ -96,9 +96,11 @@ function save(state) {
 }
 
 function printOnce(state) {
-  process.stdout.write(`\n${renderEditor(state)}\n\n`);
+  // El pie —dónde se guarda y QUIÉN lo aplica— lo compone renderEditor, que
+  // está en lib/ y sí tiene tests. Construirlo aquí fue el error original:
+  // vivía sólo en esta función, así que el modo interactivo nunca lo enseñaba.
+  process.stdout.write(`\n${renderEditor(state, { configPath: resolveProtectionConfigPath() })}\n\n`);
   if (state.status === 'ready') {
-    process.stdout.write(`  Configuración en: ${resolveProtectionConfigPath()}\n`);
     process.stdout.write('  Para cambiarla: oxidegate-mcp (en un terminal interactivo)\n\n');
   }
 }
@@ -109,7 +111,7 @@ function runInteractive(initial) {
 
   const draw = () => {
     stdout.write('\x1b[2J\x1b[H');
-    stdout.write(`\n${renderEditor(state)}\n\n`);
+    stdout.write(`\n${renderEditor(state, { configPath: resolveProtectionConfigPath() })}\n\n`);
     stdout.write('  ↑↓ mover · espacio preservar/desconectar · d interruptor · enter guardar · q salir\n');
   };
 
