@@ -378,21 +378,42 @@ en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
 
 ### Avisos de MCP y servidores protegidos
 
-Con `OXIDEGATE_MCP_DISABLE_BY_DEFAULT=1`, el plugin desconecta al arrancar los
-MCP que no hayas protegido, y **te lo dice**: cuántos quedan sin conectar y
-cuáles. Después avisa cuando alguno se conecta.
-
-Qué proteger se declara en `~/.config/oxidegate-lens/config.json`:
+Todo vive en un solo fichero, `~/.config/oxidegate-lens/config.json`:
 
 ```json
 {
+  "disableByDefault": true,
   "protectedMcpServers": ["engram", "context7"]
 }
 ```
 
-`OXIDEGATE_MCP_ALLOWLIST` sigue funcionando y **gana** si está definida —
-incluso definida y vacía, que significa "esta vez no protejas nada". Así se
-puede ignorar el fichero desde la línea de comandos sin editarlo.
+Con eso, al abrir OpenCode el plugin desconecta los MCP que no hayas
+protegido y **te lo dice con las cifras delante**:
+
+```
+empiezas con 1 MCP sin conectar: context7 (4.6 kB). Siguen activos: engram (17.2 kB).
+Para volver a abrir alguno: oxidegate_lens_mcp_connect. Detalle completo: oxidegate_lens_mcp_valve.
+```
+
+Ver el estado, medir el coste y saber cómo revertirlo, sin ejecutar ningún
+comando. Después avisa cuando alguno se conecta.
+
+**Por qué el interruptor está en el fichero y no en una variable de entorno.**
+Estuvo en `OXIDEGATE_MCP_DISABLE_BY_DEFAULT` y falló una prueba real: el propio
+autor abrió OpenCode sin exportarla —con las instrucciones delante— y la
+función simplemente no corrió, sin ninguna pista de que estaba apagada. Un
+interruptor que hay que recordar exportar antes de arrancar un proceso está
+apagado la mayor parte del tiempo. Además dejaba la configuración incoherente:
+la lista en un fichero y el interruptor en el entorno, dos mecanismos para una
+sola función.
+
+Las dos variables (`OXIDEGATE_MCP_DISABLE_BY_DEFAULT` y
+`OXIDEGATE_MCP_ALLOWLIST`) **siguen funcionando y ganan** cuando están
+definidas, así que nada de lo que ya tengas configurado se rompe. El override
+va en las dos direcciones: `OXIDEGATE_MCP_DISABLE_BY_DEFAULT=0` apaga la
+función aunque el fichero la encienda. Y el allowlist definido y vacío
+significa "esta vez no protejas nada", que es como se ignora el fichero desde
+la línea de comandos sin editarlo.
 
 Dos comportamientos que conviene conocer antes de que te sorprendan:
 

@@ -202,3 +202,84 @@ test('planMcpDisable: no servers at all is nothing-to-do, never a refusal', asyn
 
   assert.equal(plan.action, 'nothing-to-do');
 });
+
+// =======================================================================
+// readDisableByDefault — the switch, moved next to the list it governs.
+//
+// It lived in OXIDEGATE_MCP_DISABLE_BY_DEFAULT alone, and that failed a real
+// test: the author of this feature opened OpenCode without exporting it, with
+// the instructions in front of him, so the whole thing silently never ran. A
+// switch you must remember to export before launching a process is a switch
+// that is off most of the time.
+//
+// It also made the configuration incoherent — the protected LIST lived in
+// config.json while the SWITCH that uses it lived in an environment
+// variable. Two mechanisms to learn for one feature.
+// =======================================================================
+
+test('readDisableByDefault: absent config means off, and we are sure of it', async () => {
+  const { readDisableByDefault } = await import('../lib/mcp-protection.mjs');
+  const { path, cleanup } = await withConfig(undefined);
+  const result = readDisableByDefault({ path, env: {} });
+  await cleanup();
+
+  assert.equal(result.status, 'known');
+  assert.equal(result.enabled, false);
+  assert.equal(result.source, 'default');
+});
+
+test('readDisableByDefault: the config file can turn it on — no env var needed', async () => {
+  const { readDisableByDefault } = await import('../lib/mcp-protection.mjs');
+  const { path, cleanup } = await withConfig(JSON.stringify({ disableByDefault: true, protectedMcpServers: ['engram'] }));
+  const result = readDisableByDefault({ path, env: {} });
+  await cleanup();
+
+  assert.equal(result.status, 'known');
+  assert.equal(result.enabled, true);
+  assert.equal(result.source, 'file');
+});
+
+test('readDisableByDefault: the env var still wins, so nothing already configured breaks', async () => {
+  const { readDisableByDefault } = await import('../lib/mcp-protection.mjs');
+  const { path, cleanup } = await withConfig(JSON.stringify({ disableByDefault: false }));
+  const result = readDisableByDefault({ path, env: { OXIDEGATE_MCP_DISABLE_BY_DEFAULT: '1' } });
+  await cleanup();
+
+  assert.equal(result.enabled, true);
+  assert.equal(result.source, 'env');
+});
+
+test('readDisableByDefault: the env var can also turn it OFF against a file that turns it on', async () => {
+  const { readDisableByDefault } = await import('../lib/mcp-protection.mjs');
+  const { path, cleanup } = await withConfig(JSON.stringify({ disableByDefault: true }));
+  const result = readDisableByDefault({ path, env: { OXIDEGATE_MCP_DISABLE_BY_DEFAULT: '0' } });
+  await cleanup();
+
+  // An override that can only ever turn things ON is not an override.
+  assert.equal(result.enabled, false);
+  assert.equal(result.source, 'env');
+});
+
+test('readDisableByDefault: a non-boolean value is UNKNOWN, never coerced', async () => {
+  const { readDisableByDefault } = await import('../lib/mcp-protection.mjs');
+  const { path, cleanup } = await withConfig(JSON.stringify({ disableByDefault: 'sí' }));
+  const result = readDisableByDefault({ path, env: {} });
+  await cleanup();
+
+  // `Boolean('sí')` is true, which would silently start disconnecting
+  // servers because someone wrote the value in Spanish.
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.reason, 'unrecognized-shape');
+  assert.equal(result.enabled, undefined, 'an unknown switch must not hand anyone a value to act on');
+});
+
+test('readDisableByDefault: an unreadable config is UNKNOWN, and unknown must not mean on', async () => {
+  const { readDisableByDefault } = await import('../lib/mcp-protection.mjs');
+  const { path, cleanup } = await withConfig('{ "disableByDefault": tru');
+  const result = readDisableByDefault({ path, env: {} });
+  await cleanup();
+
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.reason, 'malformed-json');
+  assert.equal(result.enabled, undefined);
+});

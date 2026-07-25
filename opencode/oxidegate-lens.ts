@@ -43,7 +43,7 @@ import { unwrapSdkResponse } from '../lib/sdk-response.mjs';
 import { readMcpSavingsSnapshot } from '../lib/mcp-snapshot.mjs';
 import { observeMcpUsage } from '../lib/mcp-usage.mjs';
 import { buildValveRows } from '../lib/mcp-valve.mjs';
-import { readProtectedServers, planMcpDisable } from '../lib/mcp-protection.mjs';
+import { readProtectedServers, planMcpDisable, readDisableByDefault } from '../lib/mcp-protection.mjs';
 import { diffMcpStatus, partitionByConnected } from '../lib/mcp-transitions.mjs';
 import { startupNotice, transitionNotice } from '../lib/mcp-notices.mjs';
 
@@ -54,9 +54,10 @@ import { startupNotice, transitionNotice } from '../lib/mcp-notices.mjs';
 const DEFAULT_PORT = 8080;
 const FETCH_TIMEOUT_MS = 300;
 
-const MCP_DISABLE_BY_DEFAULT_ENV = 'OXIDEGATE_MCP_DISABLE_BY_DEFAULT';
-// OXIDEGATE_MCP_ALLOWLIST is still honoured, but its name and precedence
-// now live in lib/mcp-protection.mjs, where they are testable.
+// OXIDEGATE_MCP_DISABLE_BY_DEFAULT and OXIDEGATE_MCP_ALLOWLIST are both still
+// honoured and still win when defined, but their names, their precedence and
+// the config file that now carries the same two settings all live in
+// lib/mcp-protection.mjs, where they are testable.
 const DEBUG_ENV = 'OXIDEGATE_LENS_DEBUG';
 
 function resolveBaseUrl(): string {
@@ -212,8 +213,34 @@ let lastKnownMcpStatus: unknown;
  * `lib/*.mjs`, which the suite can actually execute. This function reads the
  * SDK, calls those, and shows a toast.
  */
+/**
+ * Prices, for the startup notice, so entering the program already shows what
+ * the configured MCP servers cost — no command to run, no report to open.
+ * Returns undefined when there is no usable snapshot; the notice then falls
+ * back to naming servers without figures, which is the honest degradation.
+ */
+function readPricesForNotice(): { byName: Record<string, any>; freshness: string } | undefined {
+  const snapshot = readMcpSavingsSnapshot({});
+  if (snapshot.status !== 'known') return undefined;
+  const byName: Record<string, any> = {};
+  for (const server of snapshot.servers) byName[server.name] = server.price;
+  return { byName, freshness: snapshot.freshness };
+}
+
 async function disableMcpServersByDefault(client: any, directory: string | undefined): Promise<void> {
-  if (!envFlagEnabled(MCP_DISABLE_BY_DEFAULT_ENV)) return;
+  // The switch now lives in the same config file as the list it governs, with
+  // the env var still winning when defined. It used to be env-only, and that
+  // failed a real test: this feature's own author launched OpenCode without
+  // exporting it, so the whole thing silently never ran.
+  const _switch = readDisableByDefault({});
+  if (_switch.status !== 'known' || !_switch.enabled) {
+    if (_switch.status !== 'known') {
+      console.warn(
+        `[oxidegate-lens] MCP disable-by-default not applied: the config switch is unreadable (${_switch.reason}); doing nothing`,
+      );
+    }
+    return;
+  }
 
   const query = directory ? { directory } : undefined;
   try {
@@ -230,7 +257,11 @@ async function disableMcpServersByDefault(client: any, directory: string | undef
       console.warn(
         `[oxidegate-lens] MCP disabled-by-default refused: protection unreadable (${plan.protectionReason}); nothing disconnected`,
       );
-      await showNotice(client, directory, startupNotice({ partition: partitionByConnected(status), plan }));
+      await showNotice(
+        client,
+        directory,
+        startupNotice({ partition: partitionByConnected(status), plan, prices: readPricesForNotice() }),
+      );
       return;
     }
 
@@ -263,7 +294,11 @@ async function disableMcpServersByDefault(client: any, directory: string | undef
     // reported as a server that is off.
     const afterStatus = unwrapSdkResponse(await client.mcp.status({ query }));
     lastKnownMcpStatus = afterStatus;
-    await showNotice(client, directory, startupNotice({ partition: partitionByConnected(afterStatus), plan }));
+    await showNotice(
+      client,
+      directory,
+      startupNotice({ partition: partitionByConnected(afterStatus), plan, prices: readPricesForNotice() }),
+    );
   } catch (error) {
     console.warn(`[oxidegate-lens] MCP disabled-by-default failed: ${formatError(error)}`);
   }
