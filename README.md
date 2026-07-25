@@ -378,7 +378,39 @@ en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
 
 ### Avisos de MCP y servidores protegidos
 
-Todo vive en un solo fichero, `~/.config/oxidegate-lens/config.json`:
+### Elegirlo sin editar JSON
+
+```
+oxidegate-mcp
+```
+
+Abre un selector con tus servidores MCP, **su precio medido al lado**, y
+marcas cuáles se preservan:
+
+```
+  Servidores MCP — elige cuáles se preservan al arrancar
+
+  > ● engram        17.2 kB   se preserva
+    ○ context7       4.6 kB   se desconecta al arrancar
+
+  Desconectar al arrancar: ACTIVADO
+
+  ↑↓ mover · espacio preservar/desconectar · d interruptor · enter guardar · q salir
+```
+
+Funciona **sin OpenCode**, y a propósito: la configuración es tuya, no del
+harness, así que sirve igual con OpenCode, con `pi` o con lo que venga. Por
+una tubería o sin terminal imprime el estado y sale, en vez de intentar abrir
+una pantalla imposible.
+
+Lo único que **no** puede hacer es conectar o desconectar una sesión **en
+marcha** — eso necesita el SDK del harness y vive en el plugin
+(`oxidegate_lens_mcp_connect` / `_disconnect`). Aquí decides qué pasará la
+próxima vez que arranques.
+
+### O editando el fichero a mano
+
+Todo vive en un solo sitio, `~/.config/oxidegate-lens/config.json`:
 
 ```json
 {
