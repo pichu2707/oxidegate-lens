@@ -174,6 +174,13 @@ atribución**:
 Las tools MCP **están en el cable** — son parte de esas 40 — pero nada dice de
 qué servidor viene cada una.
 
+> **Techo levantado — ver §10.** Esa última frase describía el estado de
+> entonces. OxideGate publica ahora los **nombres** de las tools observadas
+> (`tools_by_server[].tool_names`) y la lens los cruza contra la lista
+> autoritativa del snapshot. El cable sigue sin decir **de quién** es cada
+> tool; dice **cuáles** viajaron, y eso basta para que lo resuelva quien tiene
+> el inventario.
+
 ### La prueba de que las MCP están dentro
 
 Al conectar y desconectar servidores MCP, el conteo y el peso del bloque
@@ -532,6 +539,47 @@ La tercera fila es justo el fallo que temían, y no puede ocurrir.
 **La razón de fondo por la que #5 no era resoluble tal como se planteó: le
 pedía a OxideGate una respuesta que no tiene datos para dar.** No tiene el
 snapshot. Cada instrumento sabe la mitad, y la solución exige a los dos.
+
+### Implementado
+
+`OxideGate#19` se cerró (PR#25 de OxideGate) y la lens ya lo consume. El techo
+de la §4 **está levantado en código**, no solo en el plan:
+
+- `lib/mcp-snapshot.mjs` expone `toolNames` por servidor. Una lista **ausente**
+  queda `undefined` y bloquea; `[]` se conserva como la afirmación distinta de
+  «este servidor no declara ninguna».
+- `lib/mcp-usage.mjs` **observa** los nombres del cable aplanado
+  (`usesByToolName`) sin atribuir nada — no conoce el snapshot, y su contrato
+  dice que no debe conocerlo.
+- `lib/mcp-valve.mjs` hace el cruce (`attributeFlattenedNames`), que es una
+  **búsqueda contra la lista declarada**, no una heurística de nombres.
+
+### Cuándo se sigue bloqueando, y por qué es estricto
+
+El rechazo por `tools-flattened` se mantiene entero si:
+
+| Situación | Por qué bloquea |
+|---|---|
+| Alguna fila aplanada no trajo nombres | Atribución parcial: un cero podría venir de la petición que no supo nombrar |
+| Ningún servidor del snapshot declara sus tools | No hay contra qué cruzar |
+| Un nombre casa con **dos** servidores | Atribuirlo a uno sería inventar |
+
+Una atribución a medias es **peor que ninguna**: un cero parcial se lee como un
+cero medido. Misma disciplina que la fila `unknown` — lo que no se sabe se
+declara, no se rellena.
+
+### Verificado contra el snapshot real
+
+Con el `~/.config/mcp-savings/snapshot.json` de la máquina de desarrollo
+—`engram` con 18 tools, `context7` con 2— y un cable aplanado:
+
+```
+engram       uses=5   in-use
+context7     uses=0   already-off
+```
+
+`delegation_list`, presente en el cable, **no se atribuyó a nadie**. La tercera
+fila de la tabla de arriba, comprobada.
 
 ---
 

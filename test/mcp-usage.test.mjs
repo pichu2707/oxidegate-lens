@@ -269,3 +269,74 @@ test('observeMcpUsage: an absent tools_flattened field (older proxy) is not read
 
   assert.equal(result.hasFlattenedTools, false);
 });
+
+// --- Nombres observados en el cable aplanado ---
+//
+// El contrato de este módulo decía que en una ruta que aplana "nothing says
+// which server each came from". Desde que OxideGate publica `tool_names`
+// (OxideGate#19) eso dejó de ser cierto: el cable NO dice de quién es cada
+// tool, pero sí QUÉ nombres viajaron. Este módulo los OBSERVA; el cruce
+// contra el snapshot es de `lib/mcp-valve.mjs`, que es quien tiene la lista
+// autoritativa. Aquí no se atribuye nada.
+
+function flattenedRequest({ timestamp, toolNames }) {
+  const entry = { server: '(native)', kind: 'native' };
+  if (toolNames !== undefined) entry.tool_names = toolNames;
+  return { timestamp, tools_by_server: [entry], tools_flattened: true };
+}
+
+function spreadFlattened(baseMs, spanMinutes, count, toolNames) {
+  const rows = [];
+  for (let i = 0; i < count; i += 1) {
+    const minutesAgo = spanMinutes - (spanMinutes * i) / (count - 1);
+    rows.push(flattenedRequest({ timestamp: isoMinutesBefore(baseMs, minutesAgo), toolNames }));
+  }
+  return rows;
+}
+
+test('cuenta los nombres observados en filas aplanadas', () => {
+  const base = Date.now();
+  const rows = spreadFlattened(base, 45, 6, ['engram_mem_search', 'delegation_list']);
+
+  const result = observeMcpUsage(rows);
+
+  assert.equal(result.status, 'observed');
+  assert.deepEqual(result.usesByToolName, { engram_mem_search: 6, delegation_list: 6 });
+});
+
+// La misma disciplina que `hasOthersBucket`: UNA fila envenena la ventana.
+// Si cualquier fila aplanada no trajo nombres, la atribución quedaría
+// incompleta — y una atribución incompleta se lee como completa si no se
+// declara. Un servidor con cero usos podría haberse usado justo en la
+// petición que no supo nombrarlo.
+test('una sola fila aplanada sin nombres invalida la atribución', () => {
+  const base = Date.now();
+  const rows = spreadFlattened(base, 45, 5, ['engram_mem_search']);
+  rows.push(flattenedRequest({ timestamp: isoMinutesBefore(base, 0), toolNames: undefined }));
+
+  const result = observeMcpUsage(rows);
+
+  assert.equal(result.status, 'observed');
+  assert.equal(result.flattenedNamesComplete, false);
+});
+
+test('con nombres en TODAS las filas aplanadas, la atribución es posible', () => {
+  const base = Date.now();
+  const rows = spreadFlattened(base, 45, 6, ['engram_mem_search']);
+
+  const result = observeMcpUsage(rows);
+
+  assert.equal(result.flattenedNamesComplete, true);
+});
+
+// Sin aplanado no hay nada que completar: el campo no debe afirmar que la
+// atribución por nombres está lista cuando esa vía ni siquiera hace falta.
+test('sin filas aplanadas, flattenedNamesComplete es false', () => {
+  const base = Date.now();
+  const rows = spreadRequests(base, 45, 6);
+
+  const result = observeMcpUsage(rows);
+
+  assert.equal(result.hasFlattenedTools, false);
+  assert.equal(result.flattenedNamesComplete, false);
+});
