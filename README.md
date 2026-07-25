@@ -368,10 +368,13 @@ en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
     **`"disabled"`**, no `"disconnected"`. El plugin sobrevive a eso porque
     pasa el estado del SDK **verbatim** y nunca lo compara contra una cadena
     fija. No introduzcas una.
-  - **No verificado** contra un OpenCode real: el hook `tool.execute.after` y
-    el sondeo sobre `session.idle`. Ambos se han ejercitado con un cliente
-    falso, que prueba que el cableado corre, no que OpenCode los dispare
-    cuando creemos.
+  - **Verificado** también contra un OpenCode real: el aviso de arranque (con
+    un servidor protegido preservado y el resto desconectado), y el sondeo
+    sobre `session.idle` — se conectó un MCP a mano y el aviso de transición
+    salió en el siguiente reposo, sin que OpenCode emita ningún evento de MCP.
+  - **No verificado** contra un OpenCode real: el hook `tool.execute.after`.
+    Se ha ejercitado con un cliente falso, lo que prueba que el cableado corre,
+    no que OpenCode lo dispare cuando creemos.
 
 ### Avisos de MCP y servidores protegidos
 
