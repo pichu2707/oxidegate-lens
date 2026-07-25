@@ -349,3 +349,86 @@ test('buildValveRows: OxideGate present, snapshot missing -> wire-only rows stil
   assert.equal(rows.find((r) => r.label === 'server-b').uses, 7);
   assert.equal(joinHealth, 'ok', 'no snapshot servers exist to disagree with the wire, so nothing can be "no-correspondence"');
 });
+
+// =======================================================================
+// tools-flattened outranks insufficient-observation.
+//
+// The two reasons imply OPPOSITE actions. "Not enough observation yet" tells
+// the user to keep the session running. Flattening tells them the wire on
+// this route cannot carry per-server attribution at all, so running it for a
+// week changes nothing. Since the window gate fires first, a valve that
+// checks flattening after it would only ever say "wait" — on the exact route
+// where waiting is futile.
+//
+// Found live: OpenCode's /v1/responses puts all 40 tools in one `(native)`
+// bucket with `tools_flattened: true`. The MCP tools are in there; nothing
+// says which.
+// =======================================================================
+
+test('buildValveRows: flattened tools outrank an unfilled window — the permanent reason beats the transient one', () => {
+  const snapshot = knownSnapshot([
+    snapshotServer({ name: 'engram', enabled: true, tokens: 100, price: knownPrice(17233) }),
+  ]);
+  const usage = { status: 'insufficient-observation', windowMs: 60 * 1000, count: 9, hasFlattenedTools: true };
+
+  const { rows } = buildValveRows({ snapshot, usage });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].recommendation.status, 'no-recommendation');
+  assert.equal(
+    rows[0].recommendation.reason,
+    'tools-flattened',
+    'saying "insufficient-observation" here sends the user to wait for an answer that can never arrive',
+  );
+});
+
+test('buildValveRows: flattening blocks a recommendation even on a FULL window', () => {
+  const snapshot = knownSnapshot([
+    snapshotServer({ name: 'engram', enabled: true, tokens: 100, price: knownPrice(17233) }),
+  ]);
+  // A filled window that would otherwise produce candidate-to-disable: the
+  // server is priced, enabled, and shows zero uses. That zero is exactly the
+  // one flattening makes untrustworthy.
+  const usage = {
+    status: 'observed',
+    windowMs: 45 * MINUTE_MS,
+    usesByLabel: {},
+    hasOthersBucket: false,
+    hasFlattenedTools: true,
+  };
+
+  const { rows } = buildValveRows({ snapshot, usage });
+  assert.notEqual(rows[0].recommendation.status, 'candidate-to-disable', 'a zero from a flattened window is not a zero');
+  assert.equal(rows[0].recommendation.reason, 'tools-flattened');
+});
+
+test('buildValveRows: without flattening, an unfilled window still says insufficient-observation', () => {
+  const snapshot = knownSnapshot([
+    snapshotServer({ name: 'engram', enabled: true, tokens: 100, price: knownPrice(17233) }),
+  ]);
+  const usage = { status: 'insufficient-observation', windowMs: 60 * 1000, count: 9, hasFlattenedTools: false };
+
+  const { rows } = buildValveRows({ snapshot, usage });
+  assert.equal(rows[0].recommendation.reason, 'insufficient-observation', 'the old reason must survive for the case it describes');
+});
+
+test('buildValveRows: con tools aplanadas, `uses` es undefined — un 0 ahí sería fabricado', () => {
+  const snapshot = knownSnapshot([
+    snapshotServer({ name: 'engram', enabled: true, tokens: 100, price: knownPrice(17233) }),
+  ]);
+  // Ventana LLENA: sin aplanado, un snapshot-only aquí valdría uses:0, que es
+  // una observación legítima ("se midió y no apareció en el cable"). Con las
+  // tools aplanadas ese mismo 0 deja de ser una observación: el servidor pudo
+  // usarse dentro del bloque que no sabe atribuir. Bloquear la recomendación
+  // no basta si la fila sigue IMPRIMIENDO el cero.
+  const usage = {
+    status: 'observed',
+    windowMs: 45 * MINUTE_MS,
+    usesByLabel: {},
+    hasOthersBucket: false,
+    hasFlattenedTools: true,
+  };
+
+  const { rows } = buildValveRows({ snapshot, usage });
+  assert.equal(rows[0].uses, undefined, 'sin atribución no hay cuenta de usos, ni siquiera cero');
+});

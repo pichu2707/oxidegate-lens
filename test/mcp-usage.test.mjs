@@ -202,3 +202,70 @@ test('observeMcpUsage: a native-kind entry is NOT counted as MCP usage', () => {
   assert.equal(Object.prototype.hasOwnProperty.call(result.usesByLabel, 'builtin'), false);
   assert.equal(result.hasOthersBucket, false);
 });
+
+// =======================================================================
+// tools_flattened — the dialect that erases per-server attribution.
+//
+// Found by running against a live proxy, not by reading a spec. On
+// OpenCode's `/v1/responses` route every tool arrives in ONE undifferentiated
+// bucket: `tools_by_server: [{ server: '(native)', kind: 'native', tools: 40 }]`
+// with `tools_flattened: true`. The MCP tools ARE on the wire — they are part
+// of those 40 — but nothing says which server each came from.
+//
+// Why this must be reported SEPARATELY from an insufficient window: the two
+// imply opposite actions. "Not enough observation yet" means wait. Flattening
+// means waiting will NEVER help, because the wire structurally cannot carry
+// the attribution. Reporting the transient reason while a permanent one also
+// applies sends the user to wait forever.
+//
+// OxideGate writes `null`, NOT `false`, on requests that carried no tools —
+// its own honesty marker for "no claim". A `null` therefore proves nothing
+// about flattening and must not be read as "attribution intact".
+// =======================================================================
+
+test('observeMcpUsage: a row declaring tools_flattened poisons the window for per-server attribution', () => {
+  const base = Date.parse('2026-07-25T12:00:00.000Z');
+  const rows = spreadRequests(base, 45, 6);
+  rows[3].tools_flattened = true;
+
+  const result = observeMcpUsage(rows, { now: base });
+  assert.equal(result.status, 'observed');
+  assert.equal(
+    result.hasFlattenedTools,
+    true,
+    'one flattened request is enough: a server showing zero uses may simply have been used in the request that could not attribute it',
+  );
+});
+
+test('observeMcpUsage: hasFlattenedTools is reported on the INSUFFICIENT shape too', () => {
+  const base = Date.parse('2026-07-25T12:00:00.000Z');
+  const rows = spreadRequests(base, 1, 3);
+  rows.forEach((r) => {
+    r.tools_flattened = true;
+  });
+
+  const result = observeMcpUsage(rows, { now: base });
+  // This is the load-bearing one. The window gate fires first, so without
+  // this the caller only ever hears "wait longer" — on a route where more
+  // time cannot possibly help.
+  assert.equal(result.status, 'insufficient-observation');
+  assert.equal(result.hasFlattenedTools, true, 'a permanent blocker must be visible even before the window fills');
+});
+
+test('observeMcpUsage: tools_flattened null is NOT flattening — it is OxideGate declining to claim', () => {
+  const base = Date.parse('2026-07-25T12:00:00.000Z');
+  const rows = spreadRequests(base, 45, 6);
+  rows.forEach((r) => {
+    r.tools_flattened = null;
+  });
+
+  const result = observeMcpUsage(rows, { now: base });
+  assert.equal(result.hasFlattenedTools, false, 'null is written on requests with no tools to flatten; it proves nothing');
+});
+
+test('observeMcpUsage: an absent tools_flattened field (older proxy) is not read as flattening', () => {
+  const base = Date.parse('2026-07-25T12:00:00.000Z');
+  const result = observeMcpUsage(spreadRequests(base, 45, 6), { now: base });
+
+  assert.equal(result.hasFlattenedTools, false);
+});
