@@ -451,6 +451,11 @@ const RECOMMENDATION_REASON_TEXT = {
   'instruments-disagree': 'los dos instrumentos no coinciden en ningún servidor',
   'not-individually-confirmed': 'hay una fila (others) en la ventana: no se puede confirmar individualmente',
   'name-collision': 'nombre ambiguo — sanitizeServerName() colisiona con otro nombre de snapshot',
+  // Deliberadamente dice que esperar NO sirve. Es la diferencia con
+  // 'insufficient-observation', que sí se arregla con más tráfico: aquí el
+  // cable no lleva la atribución por servidor, así que más tiempo no la trae.
+  'tools-flattened':
+    'esta ruta aplana las tools (tools_flattened): el cable no dice de qué servidor viene cada una — esperar más NO lo cambia',
   'unattributed-spend': 'gasto observado que no se puede atribuir a este servidor',
   'price-unknown': 'no hay precio conocido para este servidor',
   'in-use': 'está en uso — nada que reportar',
@@ -553,6 +558,21 @@ function writeMcpValveSection({ snapshot, usage, valve }) {
         '  en esta ventana — las dos herramientas podrían no estar nombrando servidores igual. Ninguna\n' +
         '  recomendación de este bloque se basa en esto.\n',
     );
+  }
+
+  // El aplanado gana al pie de "observación insuficiente", por la misma razón
+  // por la que gana en lib/mcp-valve.mjs: los dos mensajes implican acciones
+  // OPUESTAS. Decir "todavía no alcanza" debajo de unas filas que acaban de
+  // explicar que esperar no sirve es contradecirse, y el lector se queda con
+  // el consejo equivocado — que además es el que le hace perder el tiempo.
+  if (usage.hasFlattenedTools === true) {
+    process.stdout.write(
+      `\n  sin atribución por servidor en esta ruta: las ${usage.count ?? 'las'} petición(es) observadas\n` +
+        '  llegan con las tools APLANADAS en un solo bloque (tools_flattened), así que el cable\n' +
+        '  no dice de qué servidor viene cada una. Más tráfico no lo cambia: haría falta una ruta\n' +
+        '  o un dialecto que conserve la atribución.\n',
+    );
+    return;
   }
 
   if (usage.status !== 'observed') {

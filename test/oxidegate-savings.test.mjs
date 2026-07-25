@@ -1208,3 +1208,62 @@ test('valve informado (d): dos nombres de snapshot que colisionan al sanear -> a
   assertNoFabricatedZero(assert, stdout);
   assertNoDroppedSpend(assert, stdout, ['pago_api', 'limpio_server']);
 });
+
+// =======================================================================
+// tools_flattened, a nivel CLI.
+//
+// Encontrado corriendo contra un proxy vivo: OpenCode en /v1/responses manda
+// las 40 tools en un solo bloque `(native)` con `tools_flattened: true`. Las
+// MCP están ahí dentro; nada dice cuál es cuál.
+//
+// El defecto que este test fija NO es que faltara la razón — es que al
+// añadirla, el PIE de la sección seguía diciendo "todavía no alcanza para
+// juzgar uso" debajo de unas filas que acababan de explicar que esperar no
+// sirve. Dos frases contradictorias en la misma pantalla, y el lector se
+// queda con la que le hace perder el tiempo. Esa contradicción se vio
+// leyendo el stdout real, que es justo para lo que existe esta suite.
+// =======================================================================
+test('valve informado (d): tools aplanadas -> razón permanente, y el pie NO contradice diciendo "todavía no alcanza"', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [{ server: 'engram', enabled: true, tokens: 3788, bytes: 17233, ok: true }],
+  });
+  const requests = requestsWindow({
+    count: 6,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [{ server: '(native)', kind: 'native', tools: 40, bytes: 48131 }],
+  });
+  // Lo que hace la ruta /v1/responses de verdad.
+  requests.forEach((r) => {
+    r.tools_flattened = true;
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  const sectionD = stdout.slice(stdout.indexOf('valve informado MCP'));
+
+  assert.ok(sectionD.includes('tools_flattened'), 'la razón real debe nombrarse, no esconderse tras una genérica');
+  assert.ok(
+    /esperar más NO lo cambia|Más tráfico no lo cambia/.test(sectionD),
+    'el usuario debe saber que esperar no sirve: es la única diferencia útil con observación insuficiente',
+  );
+  assert.ok(
+    !sectionD.includes('todavía no alcanza para juzgar uso'),
+    'el pie no puede decir "todavía no alcanza" bajo filas que explican que esperar es inútil — es la contradicción que este test fija',
+  );
+  assert.ok(!/\b0 usos\b/.test(sectionD), 'con las tools aplanadas, un 0 sería fabricado');
+  assert.ok(!sectionD.includes('candidato a desconectar'), 'jamás recomendar desconectar sin atribución');
+
+  assertNoDeadCausalArtifacts(assert, stdout);
+  assertNoUnwindowedRecommendation(assert, stdout);
+  assertNoFabricatedZero(assert, stdout);
+});
