@@ -11,15 +11,31 @@
 import { createServer } from 'node:http';
 
 /**
- * Starts a throwaway HTTP server serving canned JSON at GET /requests and
- * GET /stats — the only two endpoints `bin/oxidegate-savings.mjs` reads.
+ * Starts a throwaway HTTP server serving canned JSON at GET /requests,
+ * GET /stats and GET /health.
  *
- * @param {{ requests?: unknown[], stats?: unknown[] }} fixtures
+ * `/health` está aquí porque un OxideGate real lo sirve desde 0.3.0, y el
+ * diagnóstico (`--doctor`) lo consulta. Un mock que no lo sirviera haría que
+ * un proxy sano se diagnosticara como roto — el fixture tiene que
+ * representar el sistema, no una versión anterior de él. Pásalo a `false`
+ * para simular deliberadamente un proxy previo a 0.3.0.
+ *
+ * @param {{ requests?: unknown[], stats?: unknown[], health?: boolean }} fixtures
  * @returns {Promise<{ url: string, close: () => Promise<void> }>}
  */
-export function startMockOxideGate({ requests = [], stats = [] } = {}) {
+export function startMockOxideGate({ requests = [], stats = [], health = true } = {}) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      if (req.url === '/health') {
+        if (!health) {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'not found' }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
+        return;
+      }
       const body = req.url === '/requests' ? requests : req.url === '/stats' ? stats : null;
       if (body === null) {
         res.writeHead(404, { 'content-type': 'application/json' });

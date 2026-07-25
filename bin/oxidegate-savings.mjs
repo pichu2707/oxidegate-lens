@@ -116,6 +116,8 @@ import { readDeclaredMcpServers, sanitizeServerName } from '../lib/mcp-config.mj
 import { readMcpSavingsSnapshot } from '../lib/mcp-snapshot.mjs';
 import { observeMcpUsage } from '../lib/mcp-usage.mjs';
 import { buildValveRows } from '../lib/mcp-valve.mjs';
+import { readProtectedServers, readDisableByDefault } from '../lib/mcp-protection.mjs';
+import { diagnose } from '../lib/mcp-doctor.mjs';
 
 const DEFAULT_PORT = 8080;
 
@@ -583,8 +585,109 @@ function writeMcpValveSection({ snapshot, usage, valve }) {
   }
 }
 
+const HELP = `oxidegate-savings — qué pesa cada servidor MCP en el cable
+
+USO:
+    oxidegate-savings            El reporte completo
+    oxidegate-savings --doctor   Diagnostica la cadena y dice qué eslabón falla
+    oxidegate-savings --help     Muestra esta ayuda
+
+DÓNDE MIRA:
+    OXIDEGATE_LENS_URL, o si no OXIDEGATE_PORT, o si no el 8080.
+    El 8080 lo suelen ocupar Apache, Tomcat o Jenkins: fija OXIDEGATE_PORT.
+
+VER TAMBIÉN:
+    oxidegate-mcp    elige qué servidores MCP se preservan al arrancar
+`;
+
+/**
+ * Recoge las observaciones y deja que `lib/mcp-doctor.mjs` juzgue. Cada
+ * comprobación que hace es un fallo que mordió de verdad durante el
+ * desarrollo y que no era diagnosticable desde fuera — el peor, un /health
+ * en 404 que hacía caer todo el enrutado a directo EN SILENCIO.
+ */
+/**
+ * Sondeo TOLERANTE, que nunca lanza.
+ *
+ * `getJson` lanza a propósito y el manejador de arriba imprime y sale — bien
+ * para el reporte, fatal aquí: el doctor moría antes de diagnosticar
+ * exactamente en los dos casos para los que existe (un okupa en el puerto y
+ * un proxy caído). Un diagnóstico que se muere con el paciente no sirve.
+ */
+async function probeRequests(baseUrl) {
+  try {
+    const res = await fetch(`${baseUrl}/requests`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    // Contestó algo: es alcanzable, sea o no OxideGate. Esa distinción es
+    // justo la que el diagnóstico necesita mantener separada.
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!res.ok || !contentType.includes('json')) return { reachable: true, rows: null };
+    const body = await res.json().catch(() => null);
+    return { reachable: true, rows: Array.isArray(body) ? body : null };
+  } catch {
+    return { reachable: false, rows: null };
+  }
+}
+
+async function runDoctor(baseUrl) {
+  const { reachable, rows: requests } = await probeRequests(baseUrl);
+  const isOxidegate = Array.isArray(requests);
+
+  let healthCode = null;
+  try {
+    const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(2000) });
+    healthCode = res.status;
+  } catch {
+    // Queda en null: es una comprobación que NO se pudo hacer, no un fallo
+    // de la ruta. El módulo lo traduce a 'unknown', nunca a 'ok'.
+  }
+
+  const rows = isOxidegate ? requests : [];
+  const withTools = rows.filter((r) => r && r.context_tools_bytes > 0);
+
+  const { checks, verdict } = diagnose({
+    baseUrl,
+    reachable,
+    isOxidegate,
+    healthCode,
+    requestCount: isOxidegate ? rows.length : null,
+    flattened: withTools.some((r) => r.tools_flattened === true),
+    snapshot: readMcpSavingsSnapshot({}),
+    protection: readProtectedServers({}),
+    switchResult: readDisableByDefault({}),
+  });
+
+  const MARK = { ok: '✔', warn: '!', fail: '✖', unknown: '?' };
+  process.stdout.write('\noxidegate-lens — diagnóstico de la cadena\n\n');
+  for (const c of checks) {
+    process.stdout.write(`  ${MARK[c.status] ?? '?'} ${c.title}\n`);
+    if (c.detail) process.stdout.write(`      ${c.detail}\n`);
+    if (c.action) process.stdout.write(`      → ${c.action}\n`);
+    process.stdout.write('\n');
+  }
+  const RESUMEN = {
+    ok: 'Todo comprobado y en orden.',
+    degraded: 'Funciona, pero hay algo que limita lo que se puede reportar.',
+    unknown: 'Algo no se pudo comprobar. No se declara nada sobre lo que no se miró.',
+    broken: 'Hay al menos un eslabón roto. Empieza por el primer ✖ de arriba.',
+  };
+  process.stdout.write(`  ${verdict.toUpperCase()} — ${RESUMEN[verdict]}\n\n`);
+  process.exitCode = verdict === 'broken' ? 1 : 0;
+}
+
 async function main() {
+  const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    process.stdout.write(HELP);
+    return;
+  }
+
   const baseUrl = resolveBaseUrl();
+
+  if (args.includes('--doctor')) {
+    await runDoctor(baseUrl);
+    return;
+  }
+
   const [requests, stats] = await Promise.all([
     getJson(baseUrl, '/requests'),
     getJson(baseUrl, '/stats'),

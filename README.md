@@ -378,6 +378,39 @@ en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
 
 ### Avisos de MCP y servidores protegidos
 
+### Comprobar que todo está conectado
+
+```
+oxidegate-savings --doctor
+```
+
+Recorre la cadena entera y dice **qué eslabón falla y qué hacer**. Cada
+comprobación que hace es un fallo que costó tiempo real de encontrar y que no
+era diagnosticable desde fuera:
+
+```
+  ✔ El proxy responde
+  ✔ Lo que responde ES OxideGate
+  ✔ /health responde 200
+  ✔ 41 peticiones observadas
+  ! Las tools llegan APLANADAS (tools_flattened)
+      → La mitad PRECIO sigue siendo válida; la mitad USO no puede funcionar
+        en esta ruta, y acumular más tráfico NO lo cambia.
+  ✔ Precio disponible para 2 servidor(es)
+  ✔ Desconectar al arrancar: ACTIVADO (1 protegido/s)
+
+  DEGRADED — Funciona, pero hay algo que limita lo que se puede reportar.
+```
+
+Una comprobación que **no se pudo hacer** sale como `?`, nunca como `✔`, y el
+veredicto no puede ser `OK` mientras quede alguna sin saber. Decir «todo bien»
+sobre algo que no se miró cierra la investigación que habría encontrado el
+problema.
+
+Y si algo está roto, **diagnostica igual**: apuntar a un puerto ocupado por
+otro servicio, o a un proxy caído, produce el informe completo en vez de un
+`fetch failed` a secas.
+
 ### Elegirlo sin editar JSON
 
 ```
