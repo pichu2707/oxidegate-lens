@@ -190,3 +190,86 @@ test('readMcpSavingsSnapshot: path exists but is unreadable as a file -> unknown
   assert.equal(result.status, 'unknown');
   assert.equal(result.reason, 'unreadable');
 });
+
+// --- toolNames: el dato que habilita la atribución con el cable aplanado ---
+//
+// `readMcpSavingsSnapshot` descartaba `tools[]`, que es justo la lista
+// autoritativa que `lib/mcp-valve.mjs` necesita para cruzar contra los
+// `tool_names` del cable. Sin ella, un cliente que aplana no se puede
+// atribuir por mucho que OxideGate publique los nombres.
+
+test('expone los nombres de tools de cada servidor', async (t) => {
+  const path = await writeSnapshotFixture(
+    t,
+    JSON.stringify({
+      timestamp: Date.now(),
+      mcpMeasurement: [
+        {
+          server: 'engram',
+          ok: true,
+          bytes: 100,
+          tools: [{ name: 'mem_search', bytes: 10 }, { name: 'mem_save', bytes: 12 }],
+        },
+      ],
+    }),
+  );
+
+  const snap = readMcpSavingsSnapshot({ path, now: Date.now() });
+
+  assert.deepEqual(snap.servers[0].toolNames, ['mem_search', 'mem_save']);
+});
+
+// La misma invariante de honestidad que rige bytes y tokens: una lista
+// AUSENTE no es una lista VACÍA. `undefined` significa "este snapshot no
+// dice nada de sus tools" y bloquea la atribución; `[]` significaría "este
+// servidor no declara ninguna", que es una afirmación distinta y más fuerte.
+test('una lista de tools ausente queda undefined, nunca []', async (t) => {
+  const path = await writeSnapshotFixture(
+    t,
+    JSON.stringify({
+      timestamp: Date.now(),
+      mcpMeasurement: [{ server: 'sin-tools', ok: true, bytes: 5 }],
+    }),
+  );
+
+  const snap = readMcpSavingsSnapshot({ path, now: Date.now() });
+
+  assert.equal(snap.servers[0].toolNames, undefined);
+});
+
+test('una lista vacía SÍ se conserva como vacía', async (t) => {
+  const path = await writeSnapshotFixture(
+    t,
+    JSON.stringify({
+      timestamp: Date.now(),
+      mcpMeasurement: [{ server: 'cero-tools', ok: true, bytes: 5, tools: [] }],
+    }),
+  );
+
+  const snap = readMcpSavingsSnapshot({ path, now: Date.now() });
+
+  assert.deepEqual(snap.servers[0].toolNames, []);
+});
+
+// Entradas basura dentro de `tools[]` no tumban la lectura ni se cuelan como
+// nombres: se descartan, y lo que quede sigue siendo utilizable.
+test('descarta entradas de tools sin nombre usable', async (t) => {
+  const path = await writeSnapshotFixture(
+    t,
+    JSON.stringify({
+      timestamp: Date.now(),
+      mcpMeasurement: [
+        {
+          server: 'mixto',
+          ok: true,
+          bytes: 9,
+          tools: [{ name: 'bueno' }, null, { bytes: 3 }, { name: 42 }, 'suelto'],
+        },
+      ],
+    }),
+  );
+
+  const snap = readMcpSavingsSnapshot({ path, now: Date.now() });
+
+  assert.deepEqual(snap.servers[0].toolNames, ['bueno']);
+});

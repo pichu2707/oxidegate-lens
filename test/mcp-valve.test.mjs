@@ -432,3 +432,109 @@ test('buildValveRows: con tools aplanadas, `uses` es undefined — un 0 ahí ser
   const { rows } = buildValveRows({ snapshot, usage });
   assert.equal(rows[0].uses, undefined, 'sin atribución no hay cuenta de usos, ni siquiera cero');
 });
+
+// --- Atribución por nombres cuando el cable viene aplanado ---
+//
+// El techo que documentaba `INFORME-VALVULA-MCP.md` §4. Con `tool_names` en
+// el cable (OxideGate#19) y `toolNames` en el snapshot, el cruce es una
+// BÚSQUEDA contra verdad de campo, no una heurística de nombres — que es lo
+// que OxideGate#5 rechazó con razón.
+
+function flattenedUsage(usesByToolName, { complete = true } = {}) {
+  return {
+    status: 'observed',
+    windowMs: 60 * 60 * 1000,
+    usesByLabel: {},
+    hasOthersBucket: false,
+    hasFlattenedTools: true,
+    usesByToolName,
+    flattenedNamesComplete: complete,
+  };
+}
+
+function snapshotWith(servers) {
+  return { status: 'known', freshness: 'fresh', timestamp: Date.now(), servers };
+}
+
+test('atribuye un nombre aplanado con prefijo del servidor', () => {
+  const snapshot = snapshotWith([
+    { name: 'engram', price: { status: 'known', bytes: 100 }, toolNames: ['mem_search'] },
+  ]);
+  const usage = flattenedUsage({ engram_mem_search: 4 });
+
+  const { rows } = buildValveRows({ snapshot, usage });
+  const engram = rows.find((r) => r.label === 'engram');
+
+  assert.equal(engram.uses, 4, 'engram_mem_search es de engram');
+});
+
+test('un nombre nativo genuino no se atribuye a nadie', () => {
+  const snapshot = snapshotWith([
+    { name: 'engram', price: { status: 'known', bytes: 100 }, toolNames: ['mem_search'] },
+  ]);
+  const usage = flattenedUsage({ delegation_list: 7 });
+
+  const { rows } = buildValveRows({ snapshot, usage });
+  const engram = rows.find((r) => r.label === 'engram');
+
+  assert.equal(engram.uses, 0, 'delegation_list no casa con ninguna lista MCP');
+});
+
+// El fallo que OxideGate#5 temía, y que aquí NO puede ocurrir: partir por `_`
+// habría hecho de `delegation` un servidor. El cruce va contra la lista, no
+// contra el patrón del nombre.
+test('nombres sin nombres en alguna fila mantienen el bloqueo', () => {
+  const snapshot = snapshotWith([
+    { name: 'engram', price: { status: 'known', bytes: 100 }, toolNames: ['mem_search'] },
+  ]);
+  const usage = flattenedUsage({ engram_mem_search: 4 }, { complete: false });
+
+  const { rows } = buildValveRows({ snapshot, usage });
+  const engram = rows.find((r) => r.label === 'engram');
+
+  assert.equal(engram.uses, undefined, 'atribución incompleta no imprime un cero');
+  assert.equal(engram.recommendation.reason, 'tools-flattened');
+});
+
+// Un snapshot que no declara sus tools no puede resolver el cruce. `undefined`
+// bloquea; `[]` sería la afirmación distinta de "este servidor no tiene tools".
+test('un snapshot sin toolNames mantiene el bloqueo', () => {
+  const snapshot = snapshotWith([
+    { name: 'engram', price: { status: 'known', bytes: 100 } },
+  ]);
+  const usage = flattenedUsage({ engram_mem_search: 4 });
+
+  const { rows } = buildValveRows({ snapshot, usage });
+  const engram = rows.find((r) => r.label === 'engram');
+
+  assert.equal(engram.recommendation.reason, 'tools-flattened');
+});
+
+// Si un mismo nombre casa con dos servidores, atribuirlo a uno sería
+// inventar. Se bloquea la ventana entera, misma disciplina que una fila sin
+// nombres: una atribución parcial se lee como completa si no se declara.
+test('un nombre que casa con dos servidores bloquea la atribución', () => {
+  const snapshot = snapshotWith([
+    { name: 'uno', price: { status: 'known', bytes: 10 }, toolNames: ['comun'] },
+    { name: 'dos', price: { status: 'known', bytes: 20 }, toolNames: ['comun'] },
+  ]);
+  const usage = flattenedUsage({ comun: 3 });
+
+  const { rows } = buildValveRows({ snapshot, usage });
+
+  assert.ok(rows.every((r) => r.recommendation.reason === 'tools-flattened'));
+});
+
+test('con la atribución resuelta, un servidor sin usos es candidato', () => {
+  const snapshot = snapshotWith([
+    { name: 'engram', price: { status: 'known', bytes: 100 }, toolNames: ['mem_search'] },
+    { name: 'ocioso', price: { status: 'known', bytes: 50 }, toolNames: ['nunca_usada'] },
+  ]);
+  const usage = flattenedUsage({ engram_mem_search: 6 });
+
+  const { rows } = buildValveRows({ snapshot, usage });
+  const ocioso = rows.find((r) => r.label === 'ocioso');
+
+  assert.equal(ocioso.uses, 0);
+  assert.equal(ocioso.recommendation.status, 'candidate-to-disable');
+});
