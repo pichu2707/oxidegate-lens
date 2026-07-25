@@ -54,7 +54,7 @@ Por eso la columna que importa no es «¿acepta base_url?» sino **«¿medible e
 | Claude Code | No por defecto — pero cae a eager detrás de un `ANTHROPIC_BASE_URL` no-first-party (OxideGate lo es) | Sí (statusline/plugins) | Sí, verificado | Lens sobre proxy — el costo medido es artefacto del propio proxy (ver conclusión 4) |
 | **Codex CLI** | Desconocido | No | Sí, verificado | Lens sobre proxy |
 | **Gemini CLI** | Desconocido | No | Sí, verificado | Lens sobre proxy |
-| pi.dev | No (lazy por defecto; eager opt-in) | Widget/statusline (sin sidebar) | **Sí, verificado** | Lens sobre proxy — mide el total, pero **no atribuye por servidor** (ver abajo) |
+| pi.dev | No — MCP tras un *gateway* de una sola tool, conexión bajo demanda | Widget/statusline (sin sidebar) | **Sí, verificado** | Lens sobre proxy — mide el total, **no atribuye por servidor**, y **no necesita válvula** (ver abajo) |
 | openclaw.ai | Sí | No (habría que forkear el Gateway) | Probable (pendiente) | Lens sobre proxy |
 | Cline | Desconocido | No (webview propia) | Probable (pendiente) | Lens sobre proxy |
 | Roo Code | Desconocido | No | Probable (pendiente) | Lens sobre proxy |
@@ -115,6 +115,35 @@ también — sin verificar.
 Se deja como párrafo y no como columna a propósito: rellenar diecinueve celdas
 con dos medidas y diecisiete conjeturas convertiría una tabla de hechos en una
 de impresiones, que es justo lo que este documento existe para evitar.
+
+### El caso de `pi`: no necesita válvula porque no tiene el problema
+
+Investigando si merecía la pena un plugin para `pi` apareció algo que cambia
+cómo hay que leer su fila. **`pi` resolvió el coste de MCP por arquitectura**,
+no por configuración.
+
+Medido en la instalación de esta máquina (`pi` 0.80.10):
+
+| Hecho | Evidencia |
+|---|---|
+| MCP en `pi` llega por una **extensión**, no por el núcleo | `pi-mcp-adapter` 2.11.0; la `ExtensionAPI` de `pi` no menciona MCP ni una vez |
+| Esa extensión registra **una sola tool**, llamada `mcp` | `index.ts:256` — es un *gateway*, no N tools por servidor |
+| Conecta **bajo demanda** | su parámetro `connect` está documentado como «lazy connect + metadata refresh» |
+| **No existe `disconnect`** | solo `connect`, `reconnect`, `auth` y `logout` |
+
+Tener diez servidores MCP configurados en `pi` cuesta **un esquema de tool**,
+no diez servidores multiplicados por sus herramientas. El descubrimiento se
+hace con `search` dentro del gateway, no mandando cada esquema en cada
+petición.
+
+Por eso no hay `disconnect`: **no haría falta**. La válvula informada existe
+para responder *«¿qué esquemas MCP puedo dejar de pagar?»*, y en `pi` no se
+están pagando.
+
+Lo que sí queda medido y sigue abierto: los **72.570 bytes** que `pi` manda por
+petición son sus 46 herramientas nativas y de extensiones. **Ni un byte es
+MCP.** Ahí la pregunta útil no es qué desconectar, sino por qué pesa tanto lo
+propio — y eso el reporte ya lo mide sin necesidad de plugin.
 
 ### Por qué importa para el producto
 
