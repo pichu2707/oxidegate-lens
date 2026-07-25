@@ -50,11 +50,11 @@ Por eso la columna que importa no es «¿acepta base_url?» sino **«¿medible e
 
 | Harness | Carga eager | Slot UI de terceros | Medible en local | Clasificación |
 |---|---|---|---|---|
-| **OpenCode** | Sí | Sí (`slots.register`) | **Sí, verificado** | **Target in-harness (único limpio)** |
+| **OpenCode** | Sí | Sí (`slots.register`) | **Sí, verificado** | **Target in-harness (único limpio)** — pero **no atribuye por servidor** en el dialecto Responses (ver abajo) |
 | Claude Code | No por defecto — pero cae a eager detrás de un `ANTHROPIC_BASE_URL` no-first-party (OxideGate lo es) | Sí (statusline/plugins) | Sí, verificado | Lens sobre proxy — el costo medido es artefacto del propio proxy (ver conclusión 4) |
 | **Codex CLI** | Desconocido | No | Sí, verificado | Lens sobre proxy |
 | **Gemini CLI** | Desconocido | No | Sí, verificado | Lens sobre proxy |
-| pi.dev | No (lazy por defecto; eager opt-in) | Widget/statusline (sin sidebar) | Probable (pendiente) | Condicional (solo con servers eager) |
+| pi.dev | No (lazy por defecto; eager opt-in) | Widget/statusline (sin sidebar) | **Sí, verificado** | Lens sobre proxy — mide el total, pero **no atribuye por servidor** (ver abajo) |
 | openclaw.ai | Sí | No (habría que forkear el Gateway) | Probable (pendiente) | Lens sobre proxy |
 | Cline | Desconocido | No (webview propia) | Probable (pendiente) | Lens sobre proxy |
 | Roo Code | Desconocido | No | Probable (pendiente) | Lens sobre proxy |
@@ -75,6 +75,59 @@ Por eso la columna que importa no es «¿acepta base_url?» sino **«¿medible e
 - **Verificado** — se corrió tráfico real a través de OxideGate y se capturó.
 - **Probable (pendiente)** — acepta `base_url`, pero falta confirmar cliente-vs-nube.
 - **No** — la arquitectura impide un proxy local (nube, backend cerrado).
+
+---
+
+## Medible tampoco basta: la atribución por servidor
+
+Este documento empieza contando que la columna que importaba no era «¿acepta
+`base_url`?» sino «¿medible en local?», con Warp como ejemplo canónico.
+Midiendo tráfico real apareció **un tercer filtro**, y este documento aún no lo
+tiene como columna porque sólo hay datos medidos de dos harnesses.
+
+**Un harness puede ser perfectamente medible y aun así no servir para la
+válvula informada**, si manda sus herramientas sin decir de qué servidor MCP
+viene cada una. Cuando eso pasa, OxideGate las mete todas en un único bloque
+`(native)` y levanta la bandera `tools_flattened: true` — que es una admisión
+honesta de opacidad, no una atribución.
+
+### Lo que está medido
+
+| Harness | Ruta | Qué se observó |
+|---|---|---|
+| **OpenCode** | `/v1/responses` y `/v1/codex/responses` | 40 tools y 48.172 B en **un solo** bloque `(native)`, `tools_flattened: true` |
+| **pi** | `/v1/codex/responses` | 7 peticiones capturadas, **todas** `(native)`, 72.570 B por petición |
+
+La prueba de que las tools MCP viajan **dentro** de ese bloque: conectando y
+desconectando servidores, el conteo y el peso se mueven juntos —34, 35 y 40
+tools contra 39.985, 42.116 y 48.172 bytes— **sin que aparezca nunca un
+segundo servidor**. El cable las transporta; el dialecto no las distingue.
+
+### Lo que NO está medido
+
+Del resto de la matriz **no hay dato**. Del contrato de `tools_flattened` de
+OxideGate se desprende que los dialectos Anthropic, Gemini y Chat sí usan el
+namespacing `mcp__<servidor>__<tool>` y por tanto conservan atribución, pero
+eso es leer una tabla ajena, no haber capturado tráfico. Codex CLI comparte
+dialecto Responses con OpenCode y `pi`, así que **probablemente** aplane
+también — sin verificar.
+
+Se deja como párrafo y no como columna a propósito: rellenar diecinueve celdas
+con dos medidas y diecisiete conjeturas convertiría una tabla de hechos en una
+de impresiones, que es justo lo que este documento existe para evitar.
+
+### Por qué importa para el producto
+
+Separa dos preguntas que la matriz hoy confunde en una:
+
+- *«¿cuánto pesan mis tools?»* — se responde en cualquier harness medible.
+- *«¿qué servidor MCP me cuesta qué, y cuál puedo apagar?»* — **sólo** donde el
+  cable conserva la atribución.
+
+La segunda es la válvula informada, y hoy no funciona en ninguno de los dos
+harnesses medidos. El detalle completo, en
+[`INFORME-VALVULA-MCP.md`](INFORME-VALVULA-MCP.md) §4; la vía para levantarlo,
+en [OxideGate#19](https://github.com/pichu2707/OxideGate/issues/19).
 
 ---
 

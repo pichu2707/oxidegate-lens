@@ -253,3 +253,61 @@ test('el binario sobrevive a que le corten stdout y a no tener TTY', async () =>
   assert.ok(/isTTY/.test(src), 'debe degradar sin TTY en vez de abrir una TUI imposible');
   assert.ok(/--help/.test(src), 'todo binario tiene que saber describirse');
 });
+
+// =======================================================================
+// El pie: quién aplica esto.
+//
+// El selector decía dónde se guarda la configuración y NUNCA quién la lee.
+// En pi o en Codex CLI eso significa marcar servidores, ver "Configuración
+// en: ...", y creer que has configurado algo — cuando el único consumidor de
+// ese fichero es el plugin de OpenCode. Guardar bien y no aplicar nada, en
+// silencio, es el peor de los fallos posibles aquí: no hay error que buscar.
+//
+// Va DENTRO de renderEditor a propósito, no como función aparte. Estaba solo
+// en printOnce, así que el modo interactivo —el camino principal— no lo
+// enseñaba. Metiéndolo en el render es imposible pintar el selector sin él.
+// =======================================================================
+
+test('el render dice DÓNDE se guarda y QUIÉN lo aplica', () => {
+  const out = renderEditor(baseState(), { configPath: '/casa/.config/oxidegate-lens/config.json' });
+
+  assert.match(out, /\/casa\/\.config\/oxidegate-lens\/config\.json/, 'la ruta debe salir');
+  assert.match(out, /OpenCode/, 'y quién la aplica, que es la parte que faltaba');
+});
+
+test('el render avisa de que en otros harnesses no lo lee nadie', () => {
+  const out = renderEditor(baseState(), { configPath: '/x/config.json' });
+
+  // Sin esto, un usuario de pi configura el vacío y no tiene forma de saberlo.
+  assert.match(out, /pi\b/, 'debe nombrar el harness donde esto no aplica');
+  assert.match(out, /no lo lee nadie|no lo aplica nadie|NADIE/i);
+});
+
+test('sin ruta, el pie no imprime una ruta rota', () => {
+  const out = renderEditor(baseState());
+
+  assert.doesNotMatch(out, /undefined/, 'jamás una ruta undefined en pantalla');
+  assert.doesNotMatch(out, /Configuración en:\s*$/m, 'ni una etiqueta con el hueco vacío detrás');
+});
+
+test('el estado sin inventario no arrastra el pie: no hay nada configurado que aplicar', () => {
+  const out = renderEditor({ status: 'no-inventory', reason: 'missing-file' }, { configPath: '/x/config.json' });
+
+  assert.doesNotMatch(out, /OpenCode/, 'ahí el mensaje útil es instalar mcp-savings, no quién aplicaría una lista que no existe');
+});
+
+test('el binario no vuelve a construir el pie por su cuenta', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, resolve } = await import('node:path');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const src = readFileSync(resolve(here, '../bin/oxidegate-mcp.mjs'), 'utf8');
+
+  // Tercera fuga de lógica a la cáscara en este mismo fichero (antes: la
+  // fusión del config, y este pie). El patrón está claro, así que el
+  // guardarraíl se queda.
+  assert.ok(!/Configuración en:/.test(src), 'la ruta la compone renderEditor, no el binario');
+  assert.ok(!/Lo aplica:/.test(src), 'y quién lo aplica también');
+  const renders = src.match(/renderEditor\(state, \{ configPath:/g) ?? [];
+  assert.equal(renders.length, 2, 'los DOS caminos —imprimir y TUI— deben pasar la ruta, o uno se queda mudo');
+});
