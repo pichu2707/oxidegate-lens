@@ -20,7 +20,14 @@ import { createServer } from 'node:http';
 import assert from 'node:assert/strict';
 import { startMockOxideGate } from './helpers/mock-oxidegate-server.mjs';
 import { makeFakeClaude } from './helpers/fake-claude.mjs';
-import { runSavingsCli, assertNoDeadCausalArtifacts } from './helpers/run-savings-cli.mjs';
+import { makeFakeSnapshot } from './helpers/fake-snapshot.mjs';
+import {
+  runSavingsCli,
+  assertNoDeadCausalArtifacts,
+  assertNoUnwindowedRecommendation,
+  assertNoFabricatedZero,
+  assertNoDroppedSpend,
+} from './helpers/run-savings-cli.mjs';
 
 function baseEntry(overrides = {}) {
   return {
@@ -175,11 +182,24 @@ test('defectos 3 y 4: mismo entry con dos `client` distintos -> tabla y veredict
   assert.equal(run2.code, 0);
 
   // Sólo la primera línea ("fuente: ... cliente: ...") puede diferir
-  // legítimamente. Todo lo demás — tabla, veredictos, texto de ausencia —
-  // tiene que ser byte-por-byte idéntico: el header `client` nunca decide.
-  const [, ...rest1] = run1.stdout.split('\n');
-  const [, ...rest2] = run2.stdout.split('\n');
-  assert.equal(rest1.join('\n'), rest2.join('\n'));
+  // legítimamente. El dashboard factual también imprime `client`; se
+  // normaliza ese valor y todo lo demás — tabla, veredictos, texto de
+  // ausencia — tiene que ser byte-por-byte idéntico: el header `client`
+  // nunca decide.
+  // El segundo reemplazo se detiene en el próximo separador de campo (dos
+  // espacios), no en el literal "  upstream=": la fixture de este test no
+  // trae `route`, así que hoy "cliente=" cae pegado a "  upstream=" y ambas
+  // formas coinciden. Pero si alguien agrega `route` a esta fixture más
+  // adelante, un `.*?` que sólo sabe parar en "  upstream=" se comería
+  // "ruta=..." dentro del placeholder — y el invariante byte-a-byte que este
+  // test protege dejaría de comparar esa parte del texto sin que nadie lo
+  // note. Parar en el separador de campo evita que el placeholder cruce a un
+  // campo vecino sin importar cuál sea.
+  const normalizeClient = (text) =>
+    text
+      .replace(/cliente: .*\n/, 'cliente: <client>\n')
+      .replace(/cliente=(?:(?!  ).)*/, 'cliente=<client>');
+  assert.equal(normalizeClient(run1.stdout), normalizeClient(run2.stdout));
 
   for (const { stdout } of [run1, run2]) {
     // Ausencia: se nombran las DOS causas posibles, ninguna elegida.
@@ -474,13 +494,228 @@ test('defecto 9: con fila native en la tabla, SÍ se imprime la nota sobre filas
 });
 
 // =======================================================================
+// Defecto #10 — ausente ≠ cero, en TOTALES: la línea `tools:` del
+// dashboard sumaba `tools_by_server` con `?? 0`, que convierte un campo
+// AUSENTE en una fila (nadie reportó ese dato) en el mismo cero que un
+// campo genuinamente medido en cero. El mismo criterio que ya aplican
+// `humanizeBytes()` y `classifyRowContext` campo a campo se extiende aquí: CERO
+// FILAS es un cero real y conocido (no hay nada ni nadie de quien
+// callarse); pero UNA fila que no trae el campo es SILENCIO sobre esa
+// fila puntual, y ese silencio envenena SÓLO el total de ESE campo — el
+// otro total, y el resto del dashboard, siguen intactos.
+//
+// La fila con `tools_by_server: []` genuinamente vacío es, hoy,
+// inalcanzable a través de la CLI real: `newestBreakdown()` (más arriba
+// en este archivo) ya descarta cualquier entry con `tools_by_server`
+// vacío ANTES de llegar a `writeRequestDashboard` — ver su propio
+// comentario ("no es una fuente usable, se salta en vez de reportarse
+// como 'cero servidores'"). Por eso no hay aquí un test de "0 filas
+// reales" contra el binario: sería un test que no puede fallar ni pasar
+// por la vía pública, y este archivo no fabrica escenarios que no puede
+// producir de verdad. Lo que SÍ es alcanzable — y es lo que importa para
+// el defecto real — es que una suma de valores PRESENTES en 0 se siga
+// imprimiendo como 0, nunca como '-'; y que una fila sin el campo
+// envenene sólo ESE total, nunca el otro. Eso es lo que prueban los tres
+// tests de abajo.
+// =======================================================================
+
+test('defecto 10: fila con tools=0 y bytes=0 presentes -> total real 0, nunca "-"', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        tools_by_server: [{ server: 'vacio', kind: 'mcp', tools: 0, bytes: 0 }],
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(
+    stdout.includes('tools: filas=1  tools=0  bytes=0 B'),
+    `un 0 medido de verdad debe imprimirse como 0, no como "-": ${stdout}`,
+  );
+});
+
+test('defecto 10: una fila sin `bytes` envenena SÓLO el total de bytes, nunca el de tools', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        tools_by_server: [
+          { server: 'a', kind: 'mcp', tools: 5, bytes: 100 },
+          { server: 'b', kind: 'mcp', tools: 3 }, // sin bytes: silencio, no cero
+        ],
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(
+    stdout.includes('tools: filas=2  tools=8  bytes=-'),
+    `bytes debe ser "-" (b no lo reportó) pero tools=8 (las dos filas lo reportaron): ${stdout}`,
+  );
+  // El bug real: imprimir la suma PARCIAL (100, sólo lo que reportó `a`) como
+  // si fuera el total medido de las dos filas.
+  assert.ok(
+    !stdout.includes('bytes=100 B'),
+    'no debe imprimir la suma parcial (100) como si fuera el total de bytes',
+  );
+});
+
+test('defecto 10: una fila sin `tools` envenena SÓLO el total de tools, nunca el de bytes', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        tools_by_server: [
+          { server: 'a', kind: 'mcp', tools: 5, bytes: 100 },
+          { server: 'b', kind: 'mcp', bytes: 50 }, // sin tools: silencio, no cero
+        ],
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(
+    stdout.includes('tools: filas=2  tools=-  bytes=150 B'),
+    `tools debe ser "-" (b no lo reportó) pero bytes=150 (las dos filas lo reportaron): ${stdout}`,
+  );
+});
+
+// =======================================================================
+// Cobertura adicional (revisión adversarial, ramas de writeRequestDashboard
+// nunca ejercitadas por los tests de arriba) — no son los nueve defectos
+// numerados, pero son la misma disciplina: un valor real que el filtro
+// `present()` deja pasar, o una ausencia que el propio código trata de dos
+// formas DISTINTAS, tienen que quedar fijados en una aserción.
+// =======================================================================
+
+test('dashboard factual: valores falsy REALES (stream=false, 0) sobreviven el filtro present(), nunca se leen como ausentes', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        stream: false,
+        output_tokens: 0,
+        ttft_ms: 0,
+        total_ms: 5,
+        tools_by_server: [{ server: 'srv', kind: 'mcp', tools: 1, bytes: 10 }],
+        context_tools_bytes: 10,
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  // present() sólo rechaza null/undefined — `false` y `0` son hechos
+  // medidos, no ausencias. Una "simplificación" a `if (value)` los borraría
+  // en silencio.
+  assert.ok(stdout.includes('stream=false'), `stream=false real debe imprimirse, no omitirse: ${stdout}`);
+  assert.ok(stdout.includes('output=0'), `output_tokens=0 real debe imprimirse, no omitirse: ${stdout}`);
+  assert.ok(stdout.includes('ttft_ms=0'), `ttft_ms=0 real debe imprimirse, no omitirse: ${stdout}`);
+});
+
+// Lo de abajo documenta el comportamiento ACTUAL, no lo endosa: hay dos
+// formas distintas de decir "no hay dato" en este dashboard, y hoy son
+// inconsistentes entre sí.
+//   - Pares de valor crudo (ttft_ms, total_ms, prepare_us, status, etc.):
+//     ausente -> present() los rechaza -> el par se OMITE de la línea. Si
+//     TODOS los pares de una línea están ausentes, metricLine devuelve ''
+//     y la línea entera desaparece.
+//   - Pares en bytes (system, tools, history, last_turn, other, measured,
+//     el total `bytes`): ausente -> humanizeBytes() devuelve la cadena '-',
+//     que SÍ pasa present() -> el par SIEMPRE se imprime, como `campo=-`.
+// Omisión y '-' son dos maneras distintas de decir "no hay dato"; unificarlas
+// es una decisión abierta, no algo que este test resuelva.
+test('dashboard factual: campo crudo ausente se OMITE de su línea (o hace desaparecer la línea entera); campo en bytes ausente imprime "-"', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        // Deliberadamente SIN ttft_ms/total_ms/prepare_us (los tres pares de
+        // "latencia") ni status (par crudo de "identidad") ni
+        // context_history_bytes (par en bytes de "contexto_bytes").
+        tools_by_server: [{ server: 'srv', kind: 'mcp', tools: 1, bytes: 10 }],
+        context_tools_bytes: 500,
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(
+    !stdout.includes('latencia:'),
+    `sin ttft_ms/total_ms/prepare_us la línea "latencia:" completa debe desaparecer: ${stdout}`,
+  );
+  assert.ok(
+    !stdout.includes('status='),
+    `status ausente debe omitirse de la línea, nunca imprimirse vacío/undefined/NaN: ${stdout}`,
+  );
+  assert.ok(
+    stdout.includes('history=-'),
+    `context_history_bytes ausente debe imprimirse como history=-, nunca omitirse: ${stdout}`,
+  );
+});
+
+test('caveat de filas native NO se imprime cuando también hay una fila mcp real (caso mixto)', async () => {
+  const claude = await knownZeroClaude();
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        tools_by_server: [
+          { server: '(native)', kind: 'native', tools: 2, bytes: 80 },
+          { server: 'srv_mcp', kind: 'mcp', tools: 1, bytes: 40, deferred_tools: 0 },
+        ],
+        context_tools_bytes: 120,
+      }),
+    ],
+    stats: [],
+  });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  // Con una fila mcp real presente, los bytes SÍ están atribuidos por
+  // servidor concreto; el caveat de "no hay desglose por MCP" sería falso.
+  assert.ok(
+    !stdout.includes('No hay desglose por MCP en esta fila.'),
+    `caveat no debe aparecer habiendo una fila mcp real junto a la native: ${stdout}`,
+  );
+});
+
+// =======================================================================
 // Protección adicional (no un defecto pasado, uno esperando pasar): el
 // camino "harness eager" (upstream !== 'anthropic') tiene que seguir
 // diciendo el ahorro DIRECTO y sin cobertura de duda — nueve rondas de
 // hedging hacen que sobre-corregir sea el próximo fallo más probable.
 // =======================================================================
 
-test('camino eager (upstream != anthropic): el ahorro se imprime SIN lenguaje de incertidumbre', async () => {
+test('upstream no-anthropic: no usa deferred_tools para concluir carga diferida/inmediata', async () => {
   const mock = await startMockOxideGate({
     requests: [
       baseEntry({
@@ -502,9 +737,9 @@ test('camino eager (upstream != anthropic): el ahorro se imprime SIN lenguaje de
   assert.equal(code, 0);
   assert.ok(
     stdout.includes(
-      'Este dialecto (openai) no tiene primitivo de diferido: no existe una versión\n' +
-        'donde estos bytes sean opcionales, para ningún harness. El costo de arriba es real,\n' +
-        'sin ambigüedad — nada que decidir aquí.',
+      'Este reporte no usa `deferred_tools` para decidir ahorro en tráfico openai:\n' +
+        'la tabla de bytes sólo dice qué filas MCP llegaron en esta petición. No concluye si el\n' +
+        'harness cargó herramientas de forma diferida o inmediata.',
     ),
   );
   for (const hedge of ['no se puede confirmar', 'puede ser que', 'tal vez', 'quizás', 'aviso: algunos harnesses']) {
@@ -513,6 +748,71 @@ test('camino eager (upstream != anthropic): el ahorro se imprime SIN lenguaje de
   // Los bloques (b) y (c) son exclusivos de anthropic: no deben aparecer.
   assert.ok(!stdout.includes('servidor(es) MCP disponibles'));
   assert.ok(!stdout.includes('tokens de contexto'));
+  assertNoDeadCausalArtifacts(assert, stdout);
+});
+
+test('pi/Codex: imprime dashboard factual desde /requests sin atribución MCP ni verdad de carga', async () => {
+  const mock = await startMockOxideGate({
+    requests: [
+      baseEntry({
+        client: 'pi (linux 6.19.13+parrot7-amd64; x64)',
+        route: '/v1/codex/responses',
+        upstream: 'codex',
+        status: 200,
+        model: 'gpt-5.5',
+        stream: true,
+        input_tokens: 20192,
+        output_tokens: 6,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        context_system_bytes: 31267,
+        context_tools_bytes: 72570,
+        context_history_bytes: 0,
+        context_last_turn_bytes: 71,
+        context_other_bytes: 152,
+        context_measured_bytes: 104060,
+        context_messages_count: 1,
+        context_tax_ratio: 0.9978570055737075,
+        tools_by_server: [{ server: '(native)', kind: 'native', tools: 46, bytes: 72523, deferred_tools: 0 }],
+        tools_overhead_bytes: 47,
+        ttft_ms: 4322,
+        total_ms: 4895,
+        prepare_us: 4648,
+      }),
+    ],
+    // Deliberately different aggregate data: request-level dashboard must not
+    // borrow facts from /stats, which can include unrelated concurrent traffic.
+    stats: [{ upstream: 'codex', model: 'gpt-5.5', requests: 999 }],
+  });
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: null });
+  await mock.close();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('petición reciente (/requests, no /stats):'));
+  assert.ok(stdout.includes('cliente=pi (linux 6.19.13+parrot7-amd64; x64)'));
+  assert.ok(stdout.includes('ruta=/v1/codex/responses'));
+  assert.ok(stdout.includes('upstream=codex'));
+  assert.ok(stdout.includes('modelo=gpt-5.5'));
+  assert.ok(stdout.includes('status=200'));
+  assert.ok(stdout.includes('stream=true'));
+  assert.ok(stdout.includes('input=20192'));
+  assert.ok(stdout.includes('output=6'));
+  assert.ok(stdout.includes('cache_read=0'));
+  assert.ok(stdout.includes('system=31.3 kB'));
+  assert.ok(stdout.includes('tools=72.6 kB'));
+  assert.ok(stdout.includes('measured=104.1 kB'));
+  assert.ok(stdout.includes('messages=1'));
+  assert.ok(stdout.includes('tax_ratio=99.79%'));
+  assert.ok(stdout.includes('tools: filas=1  tools=46  bytes=72.5 kB  overhead=47 B'));
+  assert.ok(stdout.includes('latencia: ttft_ms=4322  total_ms=4895  prepare_us=4648'));
+  assert.ok(stdout.includes('no trae filas MCP individuales'));
+  assert.ok(stdout.includes('no atribuyen bytes'));
+  assert.ok(stdout.includes('No hay desglose por MCP en esta fila.'));
+  assert.ok(stdout.includes('no hay servidores MCP en esta petición: nada que quitar en bytes.'));
+  assert.ok(!stdout.includes('ya re-enviados en 999'), 'no debe usar /stats para el dashboard pi');
+  assert.ok(!stdout.includes('tokens de contexto'), 'Codex/pi no debe imprimir verdad de deferred_tools como contexto');
+  assert.ok(!stdout.toLowerCase().includes('eager'), 'no debe concluir carga eager para pi/Codex');
+  assert.ok(!stdout.toLowerCase().includes('lazy'), 'no debe concluir carga lazy para pi/Codex');
   assertNoDeadCausalArtifacts(assert, stdout);
 });
 
@@ -536,4 +836,278 @@ test('puerto ocupado por otro servicio -> "no es OxideGate", no un error de pars
   } finally {
     intruso.close();
   }
+});
+
+// =======================================================================
+// (d) VALVE INFORMADO MCP — precio (mcp-savings) + uso observado
+// (OxideGate), por servidor. Ver lib/mcp-snapshot.mjs, lib/mcp-usage.mjs y
+// lib/mcp-valve.mjs para el contrato completo (join, joinHealth, la
+// conjunción de recomendación). Estos tests son de nivel CLI: cubren la
+// matriz de degradación de 5 filas de design.md (OxideGate presente/ausente
+// × snapshot fresco/stale/faltante) contra el binario real, y las cuatro
+// disciplinas de honestidad que este bloque no puede violar sin fallar:
+//
+//   A. una fila "unknown" (gasto sin atribuir) es CONSPICUA — bloque propio.
+//   B. toda recomendación de "0 usos" lleva su ventana en la MISMA línea.
+//   C. un snapshot stale marca CADA precio/recomendación que muestra.
+//   D. una medición ausente (`ok:false`) nunca se imprime como 0.
+// =======================================================================
+
+const nativeFiller = { server: '(native)', kind: 'native', tools: 1, bytes: 1 };
+
+/**
+ * Builds a `requests` array (oldest-first, RFC 3339 timestamps), evenly
+ * spaced across `spanMs`, each carrying a `(native)` filler row (so
+ * `newestBreakdown()` always has a usable, non-empty entry — see
+ * bin/oxidegate-savings.mjs) plus whatever `mcpRows` the test wants. The
+ * native filler never counts toward `lib/mcp-usage.mjs`'s `usesByLabel`
+ * (only `kind: 'mcp'` rows do), so it never contaminates a usage count.
+ */
+function requestsWindow({ count, spanMs, mcpRows = [] }) {
+  const now = Date.now();
+  const start = now - spanMs;
+  const step = count > 1 ? spanMs / (count - 1) : 0;
+  return Array.from({ length: count }, (_, i) =>
+    baseEntry({
+      timestamp: new Date(start + step * i).toISOString(),
+      tools_by_server: [nativeFiller, ...mcpRows],
+    }),
+  );
+}
+
+test('valve informado (d) fila 1/5: OxideGate presente + snapshot fresco -> valve completo (precio + uso + recomendación)', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [
+      { server: 'used_server', enabled: true, tokens: 100, bytes: 500, ok: true },
+      { server: 'unused_server', enabled: true, tokens: 200, bytes: 700, ok: true },
+    ],
+  });
+  const requests = requestsWindow({
+    count: 5,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [{ server: 'used_server', kind: 'mcp', tools: 1, bytes: 50 }],
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('used_server'));
+  assert.ok(stdout.includes('unused_server'));
+  assert.ok(stdout.includes('usos observados: 5'), `used_server debe mostrar 5 usos: ${stdout}`);
+  assert.ok(stdout.includes('candidato a desconectar'), `unused_server debe ser candidato: ${stdout}`);
+  assertNoUnwindowedRecommendation(assert, stdout);
+  assertNoFabricatedZero(assert, stdout);
+  assertNoDroppedSpend(assert, stdout, ['used_server']);
+  assertNoDeadCausalArtifacts(assert, stdout);
+});
+
+test('valve informado (d) fila 2/5: snapshot DESACTUALIZADO -> precio y recomendación marcados como stale en la MISMA línea', async () => {
+  const claude = await knownZeroClaude();
+  const staleTimestamp = Date.now() - 30 * 60 * 60 * 1000; // 30h > el umbral de 24h
+  const snap = await makeFakeSnapshot({
+    timestamp: staleTimestamp,
+    mcpMeasurement: [{ server: 'unused_server', enabled: true, tokens: 200, bytes: 700, ok: true }],
+  });
+  const requests = requestsWindow({ count: 5, spanMs: 45 * 60 * 1000, mcpRows: [] });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  const isoStamp = new Date(staleTimestamp).toISOString();
+  assert.ok(stdout.includes(isoStamp), `debe citar el timestamp original del snapshot: ${stdout}`);
+  assert.ok(stdout.includes('DESACTUALIZADO'));
+
+  const lines = stdout.split('\n');
+  const serverLine = lines.find((l) => l.includes('unused_server') && l.includes('precio='));
+  assert.ok(serverLine, 'debe haber una fila para unused_server');
+  assert.ok(
+    serverLine.includes('DESACTUALIZADO'),
+    `el precio mostrado debe marcarse stale en la MISMA línea: ${serverLine}`,
+  );
+
+  const candidateLines = lines.filter((l) => l.includes('candidato a desconectar'));
+  assert.ok(candidateLines.length > 0, 'este fixture debe producir al menos una recomendación candidata');
+  for (const line of candidateLines) {
+    assert.ok(
+      line.includes('DESACTUALIZADO'),
+      `una recomendación basada en un snapshot stale DEBE marcarlo en la MISMA línea: ${line}`,
+    );
+  }
+  assertNoUnwindowedRecommendation(assert, stdout);
+});
+
+test('valve informado (d) fila 3/5: OxideGate presente + snapshot faltante/malformado -> sólo filas "unknown", pista de instalación, nunca precio inventado', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({ malformed: true });
+  const requests = requestsWindow({
+    count: 5,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [{ server: 'mystery_server', kind: 'mcp', tools: 1, bytes: 30 }],
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('el snapshot tiene JSON inválido'), `debe nombrar la razón real: ${stdout}`);
+  assert.ok(stdout.includes('GASTO SIN ATRIBUIR'));
+  assert.ok(stdout.includes('mystery_server'));
+  assertNoDroppedSpend(assert, stdout, ['mystery_server']);
+  assertNoFabricatedZero(assert, stdout);
+  assertNoDeadCausalArtifacts(assert, stdout);
+});
+
+test('valve informado (d) fila 4/5: observación insuficiente + snapshot fresco -> precio se muestra, SIN recomendación (razón nombrada)', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [{ server: 'quiet_server', enabled: true, tokens: 50, bytes: 400, ok: true }],
+  });
+  // Sólo 2 peticiones en 5 minutos: falla AMBOS gates de suficiencia
+  // (ventana >= 30min Y conteo >= 5) — ver lib/mcp-usage.mjs.
+  const requests = requestsWindow({ count: 2, spanMs: 5 * 60 * 1000, mcpRows: [] });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('quiet_server'));
+  assert.ok(stdout.includes('400 B'));
+  assert.ok(
+    !stdout.includes('candidato a desconectar'),
+    'sin observación suficiente no debe recomendar nada, ni siquiera un "0 usos" real',
+  );
+  assert.ok(
+    stdout.includes('todavía no hay suficiente observación para juzgar uso') ||
+      stdout.includes('observación insuficiente'),
+    `debe nombrar la razón de la ausencia de recomendación: ${stdout}`,
+  );
+  assertNoUnwindowedRecommendation(assert, stdout);
+  assertNoFabricatedZero(assert, stdout);
+});
+
+test('valve informado (d) fila 5/5: sin snapshot y sin observación suficiente -> cero filas, un aviso, nunca un crash', async () => {
+  const claude = await knownZeroClaude();
+  const requests = requestsWindow({ count: 1, spanMs: 0, mcpRows: [] });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({ baseUrl: mock.url, claudePath: claude.path });
+  await mock.close();
+  await claude.cleanup();
+
+  assert.equal(code, 0);
+  assert.ok(stdout.includes('no hay datos de valve'), `debe decir explícitamente que no hay datos: ${stdout}`);
+  assertNoDeadCausalArtifacts(assert, stdout);
+});
+
+test('valve informado (d): el gasto "unknown" es CONSPICUO — bloque propio, nunca confundido con la tabla por-servidor', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [{ server: 'known_server', enabled: true, tokens: 10, bytes: 100, ok: true }],
+  });
+  const requests = requestsWindow({
+    count: 5,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [
+      { server: 'known_server', kind: 'mcp', tools: 1, bytes: 20 },
+      { server: 'ghost_server', kind: 'mcp', tools: 1, bytes: 15 },
+    ],
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  const lines = stdout.split('\n');
+  // ghost_server is a REAL `kind: 'mcp'` row on the wire, so it legitimately
+  // also appears in section (a)'s byte table (which lists every wire row,
+  // unrelated to the snapshot join). Only section (d) — the informed
+  // valve — is under test here, so every index below is scoped to AFTER
+  // that section's own header, never the whole stdout.
+  const sectionDStartIdx = lines.findIndex((l) => l.includes('valve informado MCP'));
+  assert.ok(sectionDStartIdx > -1, 'debe existir la sección (d)');
+
+  const unknownHeaderIdx = lines.findIndex((l, i) => i > sectionDStartIdx && l.includes('GASTO SIN ATRIBUIR'));
+  assert.ok(unknownHeaderIdx > -1, 'debe existir un bloque propio para gasto sin atribuir');
+
+  const ghostLineIdx = lines.findIndex((l, i) => i > sectionDStartIdx && l.includes('ghost_server'));
+  assert.ok(
+    ghostLineIdx > unknownHeaderIdx,
+    'ghost_server (sin entrada de snapshot), DENTRO de la sección (d), debe estar DENTRO del bloque "unknown", no antes',
+  );
+
+  const knownServerLine = lines.find((l, i) => i > sectionDStartIdx && l.includes('known_server') && l.includes('['));
+  assert.ok(knownServerLine, 'known_server (con snapshot) debe seguir en la tabla por-servidor normal');
+  const knownServerIdx = lines.indexOf(knownServerLine);
+  assert.ok(
+    knownServerIdx < unknownHeaderIdx,
+    'la fila con snapshot debe estar ANTES del bloque "unknown", nunca mezclada dentro de él',
+  );
+  assertNoDroppedSpend(assert, stdout, ['ghost_server', 'known_server']);
+});
+
+test('valve informado (d): precio "no se pudo medir" (ok:false, bytes:0) nunca se imprime como 0 B — ausencia no es cero', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [{ server: 'broken_server', enabled: true, tokens: null, bytes: 0, ok: false }],
+  });
+  const requests = requestsWindow({
+    count: 5,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [{ server: 'broken_server', kind: 'mcp', tools: 1, bytes: 5 }],
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  const line = stdout.split('\n').find((l) => l.includes('broken_server') && l.includes('precio='));
+  assert.ok(line, 'debe haber una fila para broken_server');
+  assert.ok(line.includes('no se pudo medir'), `precio ok:false debe decir "no se pudo medir": ${line}`);
+  assert.ok(!line.includes('0 B'), `precio ok:false NUNCA debe imprimirse como 0 B: ${line}`);
+  assertNoFabricatedZero(assert, stdout);
 });

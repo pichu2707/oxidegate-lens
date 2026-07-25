@@ -10,15 +10,21 @@
 //
 // WHAT THIS PLUGIN DOES NOT DO
 // -----------------------------
-// This plugin CANNOT route OpenCode's actual model traffic through
-// OxideGate. A plugin has no ability to set a provider `baseURL` — that is
-// a separate, top-level "provider" key in opencode.json (see
-// examples/opencode.json in this repo). Without that provider block,
-// OpenCode never talks to OxideGate at all, and this plugin will simply
-// read stale or empty data from GET /requests forever.
+// THIS plugin does not route OpenCode's model traffic through OxideGate.
+// It only reads OxideGate's stats AFTER the fact; it does not proxy,
+// intercept, or measure anything itself.
 //
-// This plugin only reads OxideGate's stats AFTER the fact. It does not
-// proxy, intercept, or measure anything itself.
+// It used to say something stronger and wrong: that a plugin CANNOT route
+// traffic at all, and that without a top-level "provider" block (see
+// examples/opencode.json) OpenCode never talks to OxideGate. That claim
+// was outdated. A plugin CAN route traffic by patching global `fetch` —
+// a fetch-patch plugin does exactly that today and works. The provider
+// block is one way to route; it is not the only one.
+//
+// Routing stays out of this file's scope either way. The correction is
+// here because a comment that overstates a limitation is still a comment
+// that lies, and this repo does not get to hold its output to a standard
+// its own documentation ignores.
 //
 // HOOK CHOICE
 // -----------
@@ -33,12 +39,21 @@
 // "tool.execute.after" was the closest documented match to "after a
 // message/tool completes."
 
+import { unwrapSdkResponse } from '../lib/sdk-response.mjs';
+import { readMcpSavingsSnapshot } from '../lib/mcp-snapshot.mjs';
+import { observeMcpUsage } from '../lib/mcp-usage.mjs';
+import { buildValveRows } from '../lib/mcp-valve.mjs';
+
 // OxideGate's own default. Kept deliberately in sync with it — but 8080 is a
 // crowded port (Apache, Tomcat, Jenkins all squat it), so if OxideGate is
 // running anywhere else you MUST set OXIDEGATE_PORT. See warnIfNotOxidegate:
 // hitting a stranger on this port used to fail completely silently.
 const DEFAULT_PORT = 8080;
 const FETCH_TIMEOUT_MS = 300;
+
+const MCP_DISABLE_BY_DEFAULT_ENV = 'OXIDEGATE_MCP_DISABLE_BY_DEFAULT';
+const MCP_ALLOWLIST_ENV = 'OXIDEGATE_MCP_ALLOWLIST';
+const DEBUG_ENV = 'OXIDEGATE_LENS_DEBUG';
 
 function resolveBaseUrl(): string {
   if (process.env.OXIDEGATE_LENS_URL) return process.env.OXIDEGATE_LENS_URL;
@@ -90,6 +105,210 @@ function formatValue(value: unknown, fmt: (v: any) => string): string {
   return value === null || value === undefined ? '-' : fmt(value);
 }
 
+function countTools(value: unknown): number | null {
+  return Array.isArray(value) ? value.length : null;
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function envFlagEnabled(name: string): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
+function debugLog(message: string): void {
+  if (!envFlagEnabled(DEBUG_ENV)) return;
+  console.log(message);
+}
+
+function mcpServerNames(status: unknown): string[] {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return [];
+  return Object.keys(status);
+}
+
+function summarizeMcpStatus(status: unknown): string {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return 'MCP actual: unknown';
+
+  const rows = Object.entries(status as Record<string, any>)
+    .map(([name, value]) => `${name}=${value?.status ?? 'unknown'}`)
+    .sort();
+
+  return `MCP actual (SDK): ${rows.join(', ') || 'none'}`;
+}
+
+async function showMcpStatusToast(client: any, directory: string | undefined, status: unknown): Promise<void> {
+  const showToast = client?.tui?.showToast;
+  if (typeof showToast !== 'function') return;
+
+  try {
+    await showToast({
+      body: {
+        title: 'OxideGate MCP actual',
+        message: summarizeMcpStatus(status).replace(/^MCP actual \(SDK\): /, ''),
+        variant: 'info',
+        duration: 5000,
+      },
+      query: directory ? { directory } : undefined,
+    });
+  } catch {
+    // Toast support is best-effort: older OpenCode builds or non-TUI clients
+    // may not expose it. The SDK status marker in tool output remains the
+    // durable source of truth.
+  }
+}
+
+function envList(name: string): Set<string> {
+  return new Set(
+    (process.env[name] ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+}
+
+async function disableMcpServersByDefault(client: any, directory: string | undefined): Promise<void> {
+  if (!envFlagEnabled(MCP_DISABLE_BY_DEFAULT_ENV)) return;
+
+  const allowlist = envList(MCP_ALLOWLIST_ENV);
+  const query = directory ? { directory } : undefined;
+  try {
+    const status = unwrapSdkResponse(await client.mcp.status({ query }));
+    const servers = mcpServerNames(status);
+    const serversToDisable = servers.filter((server) => !allowlist.has(server));
+    const preserved = servers.filter((server) => allowlist.has(server));
+    if (servers.length === 0) {
+      debugLog('[oxidegate-lens] MCP disabled-by-default enabled; no MCP servers found');
+      return;
+    }
+
+    if (serversToDisable.length === 0) {
+      debugLog(
+        `[oxidegate-lens] MCP disabled-by-default enabled; disabled=- preserved=${preserved.join(', ') || '-'}`,
+      );
+      return;
+    }
+
+    const results = await Promise.allSettled(
+      serversToDisable.map(async (server) => {
+        await client.mcp.disconnect({
+          path: { name: server },
+          query,
+        });
+        return server;
+      }),
+    );
+
+    const disabled = results
+      .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
+      .map((r) => r.value);
+    const failed = results
+      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      .map((r) => formatError(r.reason));
+
+    debugLog(
+      `[oxidegate-lens] MCP disabled-by-default enabled; disabled=${disabled.join(', ') || '-'} preserved=${
+        preserved.join(', ') || '-'
+      }${
+        failed.length ? ` failed=${failed.join(' | ')}` : ''
+      }`,
+    );
+    const afterStatus = unwrapSdkResponse(await client.mcp.status({ query }));
+    await showMcpStatusToast(client, directory, afterStatus);
+  } catch (error) {
+    console.warn(`[oxidegate-lens] MCP disabled-by-default failed: ${formatError(error)}`);
+  }
+}
+
+async function loadOpenCodeToolHelper(): Promise<any | null> {
+  try {
+    return (await import('@opencode-ai/plugin')).tool;
+  } catch (error) {
+    console.warn(
+      `[oxidegate-lens] manual MCP valve tools unavailable: @opencode-ai/plugin could not be loaded (${formatError(
+        error,
+      )}). Existing OxideGate observer logging remains active.`,
+    );
+    return null;
+  }
+}
+
+async function collectMcpValveSnapshot(
+  client: any,
+  directory: string | undefined,
+  provider?: string,
+  model?: string,
+): Promise<Record<string, unknown>> {
+  const query = directory ? { directory } : undefined;
+  const status = unwrapSdkResponse(await client.mcp.status({ query }));
+  const snapshot: Record<string, unknown> = {
+    mcp_status: status,
+    mcp_state_marker: summarizeMcpStatus(status),
+    mcp_server_count: status && typeof status === 'object' ? Object.keys(status).length : null,
+  };
+
+  if (provider && model) {
+    const tools = unwrapSdkResponse(
+      await client.tool.list({
+        query: {
+          ...(directory ? { directory } : {}),
+          provider,
+          model,
+        },
+      }),
+    );
+
+    snapshot.tool_list = tools;
+    snapshot.tool_count = countTools(tools);
+  } else {
+    snapshot.tool_list = 'skipped: pass provider and model to compare OpenCode tool-list size';
+    snapshot.tool_count = null;
+  }
+
+  return snapshot;
+}
+
+/**
+ * Joins the mcp-savings price snapshot against OxideGate's observed wire
+ * usage via `lib/mcp-valve.mjs`'s `buildValveRows` — the exact same three
+ * calls, same order, as `bin/oxidegate-savings.mjs`'s section (d). Needs the
+ * FULL `/requests` array (not a single entry) to derive the observation
+ * window, so it fetches it itself, reusing `logLatestRequest`'s fetch
+ * pattern below. Never throws: a fetch failure degrades to an empty
+ * `requests` array, which `observeMcpUsage` already treats as
+ * `insufficient-observation` — this function does no additional guessing.
+ */
+async function collectInformedValve(): Promise<ReturnType<typeof buildValveRows>> {
+  const baseUrl = resolveBaseUrl();
+  let requests: unknown = [];
+  try {
+    const res = await fetch(`${baseUrl}/requests`, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    requests = res.ok ? await res.json().catch(() => []) : [];
+  } catch {
+    requests = [];
+  }
+
+  const snapshot = readMcpSavingsSnapshot();
+  const usage = observeMcpUsage(Array.isArray(requests) ? requests : []);
+  return buildValveRows({ snapshot, usage });
+}
+
+function valveResult(value: Record<string, unknown>): string {
+  return JSON.stringify(
+    {
+      caveat: 'oxidegate-lens manual OpenCode MCP valve',
+      warning:
+        'Manual runtime control only. This does not promise same-request lazy MCP behavior or outgoing tool-list mutation.',
+      ...value,
+    },
+    null,
+    2,
+  );
+}
+
 async function logLatestRequest(): Promise<void> {
   const baseUrl = resolveBaseUrl();
   const res = await fetch(`${baseUrl}/requests`, {
@@ -121,8 +340,126 @@ export async function OxidegateLens({ project, client, $, directory, worktree }:
   // Once, at load: is the thing on that port even OxideGate? Wrong-port is the
   // single most likely misconfiguration, and it is invisible from the hook.
   probeEndpoint(resolveBaseUrl());
+  const openCodeTool = await loadOpenCodeToolHelper();
+  void disableMcpServersByDefault(client, directory);
 
   return {
+    ...(openCodeTool
+      ? {
+          tool: {
+            oxidegate_lens_mcp_valve: openCodeTool({
+              description:
+                'Inspect OpenCode MCP server status, join it with mcp-savings price data and OxideGate observed wire usage, and report a per-server recommendation (candidate-to-disable / already-off / no-recommendation, each with a named reason) before manual MCP valve tests.',
+              args: {
+                provider: openCodeTool.schema.string().optional(),
+                model: openCodeTool.schema.string().optional(),
+              },
+              async execute(args, context) {
+                try {
+                  const snapshot = await collectMcpValveSnapshot(
+                    client,
+                    context.directory ?? directory,
+                    args.provider,
+                    args.model,
+                  );
+                  const valve = await collectInformedValve();
+                  const toolCount = snapshot.tool_count === null ? 'skipped' : snapshot.tool_count;
+                  console.log(
+                    `[oxidegate-lens] MCP valve snapshot; tools=${toolCount}; ${snapshot.mcp_state_marker}`,
+                  );
+                  await showMcpStatusToast(client, context.directory ?? directory, snapshot.mcp_status);
+                  return valveResult({
+                    ok: true,
+                    action: 'valve',
+                    snapshot,
+                    rows: valve.rows,
+                    joinHealth: valve.joinHealth,
+                    windowMs: valve.windowMs,
+                    snapshotFreshness: valve.snapshotFreshness,
+                    snapshotTimestamp: valve.snapshotTimestamp,
+                  });
+                } catch (error) {
+                  return valveResult({ ok: false, action: 'valve', error: formatError(error) });
+                }
+              },
+            }),
+            oxidegate_lens_mcp_disconnect: openCodeTool({
+              description: 'Manually disconnect one OpenCode MCP server and report MCP/tool-list snapshots before and after.',
+              args: {
+                server: openCodeTool.schema.string(),
+                provider: openCodeTool.schema.string().optional(),
+                model: openCodeTool.schema.string().optional(),
+              },
+              async execute(args, context) {
+                const activeDirectory = context.directory ?? directory;
+                try {
+                  const before = await collectMcpValveSnapshot(client, activeDirectory, args.provider, args.model);
+                  const disconnected = unwrapSdkResponse(
+                    await client.mcp.disconnect({
+                      path: { name: args.server },
+                      query: activeDirectory ? { directory: activeDirectory } : undefined,
+                    }),
+                  );
+                  const after = await collectMcpValveSnapshot(client, activeDirectory, args.provider, args.model);
+                  console.log(`[oxidegate-lens] MCP disconnect ${args.server}; result=${disconnected}`);
+                  return valveResult({
+                    ok: true,
+                    action: 'disconnect',
+                    server: args.server,
+                    sdk_result: disconnected,
+                    before,
+                    after,
+                  });
+                } catch (error) {
+                  return valveResult({
+                    ok: false,
+                    action: 'disconnect',
+                    server: args.server,
+                    error: formatError(error),
+                  });
+                }
+              },
+            }),
+            oxidegate_lens_mcp_connect: openCodeTool({
+              description: 'Manually connect one OpenCode MCP server and report MCP/tool-list snapshots before and after.',
+              args: {
+                server: openCodeTool.schema.string(),
+                provider: openCodeTool.schema.string().optional(),
+                model: openCodeTool.schema.string().optional(),
+              },
+              async execute(args, context) {
+                const activeDirectory = context.directory ?? directory;
+                try {
+                  const before = await collectMcpValveSnapshot(client, activeDirectory, args.provider, args.model);
+                  const connected = unwrapSdkResponse(
+                    await client.mcp.connect({
+                      path: { name: args.server },
+                      query: activeDirectory ? { directory: activeDirectory } : undefined,
+                    }),
+                  );
+                  const after = await collectMcpValveSnapshot(client, activeDirectory, args.provider, args.model);
+                  console.log(`[oxidegate-lens] MCP connect ${args.server}; result=${connected}`);
+                  return valveResult({
+                    ok: true,
+                    action: 'connect',
+                    server: args.server,
+                    sdk_result: connected,
+                    before,
+                    after,
+                  });
+                } catch (error) {
+                  return valveResult({
+                    ok: false,
+                    action: 'connect',
+                    server: args.server,
+                    error: formatError(error),
+                  });
+                }
+              },
+            }),
+          },
+        }
+      : {}),
     'tool.execute.after': async () => {
       try {
         await logLatestRequest();

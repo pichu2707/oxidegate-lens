@@ -356,9 +356,12 @@ en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
 
 - **Plugin de OpenCode** (`opencode/oxidegate-lens.ts`): **experimental y no
   probado** contra un OpenCode real. El hook usado (`tool.execute.after`) no fue
-  verificado. Además, por sí solo no enruta nada: hace falta un bloque `provider`
-  en `opencode.json` (ver `examples/opencode.json`) para que el tráfico pase por
-  OxideGate. Tratalo como punto de partida, no como integración probada.
+  verificado. Además, por sí solo no enruta nada: sólo lee lo que OxideGate ya
+  midió. Para que el tráfico pase por OxideGate hace falta configurarlo aparte
+  — con un bloque `provider` en `opencode.json` (ver `examples/opencode.json`),
+  o parcheando `fetch` desde otro plugin. El bloque `provider` es una forma de
+  enrutar, no la única. Tratalo como punto de partida, no como integración
+  probada.
 
 ---
 

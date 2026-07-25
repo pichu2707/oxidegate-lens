@@ -113,6 +113,9 @@
 // it decides nothing, not even one extra sentence.
 
 import { readDeclaredMcpServers, sanitizeServerName } from '../lib/mcp-config.mjs';
+import { readMcpSavingsSnapshot } from '../lib/mcp-snapshot.mjs';
+import { observeMcpUsage } from '../lib/mcp-usage.mjs';
+import { buildValveRows } from '../lib/mcp-valve.mjs';
 
 const DEFAULT_PORT = 8080;
 
@@ -148,6 +151,105 @@ function pad(value, width, align = 'left') {
   if (text.length >= width) return text;
   const filler = ' '.repeat(width - text.length);
   return align === 'right' ? filler + text : text + filler;
+}
+
+function present(value) {
+  return value !== null && value !== undefined;
+}
+
+function metricLine(label, pairs) {
+  const facts = pairs.filter(([, value]) => present(value));
+  if (facts.length === 0) return '';
+  return `  ${label}: ${facts.map(([k, v]) => `${k}=${v}`).join('  ')}\n`;
+}
+
+function humanizeRatio(ratio) {
+  if (!present(ratio) || Number.isNaN(ratio)) return null;
+  return `${(ratio * 100).toFixed(2)}%`;
+}
+
+/**
+ * Sums `rows[i][key]` — but refuses to sum at all if ANY row is silent about
+ * that field (missing, non-numeric, or NaN). Same discipline as
+ * `humanizeBytes()` and `classifyRowContext` applied to a TOTAL instead of a single
+ * cell: a total built from `?? 0` turns "this row never said" into "this row
+ * said zero", and the printed sum then reads as measured when it is really
+ * partial. Zero ROWS is a different thing entirely — nobody was silent,
+ * there is nothing to sum — so an empty `rows` correctly returns a real `0`,
+ * not `null`. One missing field poisons only the total for THAT key.
+ */
+function sumOrUnknown(rows, key) {
+  let sum = 0;
+  for (const r of rows) {
+    const value = r[key];
+    if (typeof value !== 'number' || Number.isNaN(value)) return null;
+    sum += value;
+  }
+  return sum;
+}
+
+function writeRequestDashboard(entry) {
+  const rows = entry.tools_by_server ?? [];
+  const totalTools = sumOrUnknown(rows, 'tools');
+  const totalToolBytes = sumOrUnknown(rows, 'bytes');
+  const nativeRows = rows.filter((r) => r.kind === 'native');
+  const mcpRows = rows.filter((r) => r.kind === 'mcp');
+
+  process.stdout.write('petición reciente (/requests, no /stats):\n');
+  process.stdout.write(
+    metricLine('identidad', [
+      ['cliente', entry.client ?? 'desconocido'],
+      ['ruta', entry.route],
+      ['upstream', entry.upstream],
+      ['modelo', entry.model],
+      ['status', entry.status],
+      ['stream', entry.stream],
+    ]),
+  );
+  process.stdout.write(
+    metricLine('tokens', [
+      ['input', entry.input_tokens],
+      ['output', entry.output_tokens],
+      ['cache_read', entry.cache_read_tokens],
+      ['cache_write', entry.cache_write_tokens],
+    ]),
+  );
+  process.stdout.write(
+    metricLine('contexto_bytes', [
+      ['system', humanizeBytes(entry.context_system_bytes)],
+      ['tools', humanizeBytes(entry.context_tools_bytes)],
+      ['history', humanizeBytes(entry.context_history_bytes)],
+      ['last_turn', humanizeBytes(entry.context_last_turn_bytes)],
+      ['other', humanizeBytes(entry.context_other_bytes)],
+      ['measured', humanizeBytes(entry.context_measured_bytes)],
+      ['messages', entry.context_messages_count],
+      ['tax_ratio', humanizeRatio(entry.context_tax_ratio)],
+    ]),
+  );
+  process.stdout.write(
+    metricLine('tools', [
+      ['filas', rows.length],
+      ['tools', totalTools ?? '-'],
+      ['bytes', humanizeBytes(totalToolBytes)],
+      ['overhead', humanizeBytes(entry.tools_overhead_bytes)],
+    ]),
+  );
+  process.stdout.write(
+    metricLine('latencia', [
+      ['ttft_ms', entry.ttft_ms],
+      ['total_ms', entry.total_ms],
+      ['prepare_us', entry.prepare_us],
+    ]),
+  );
+
+  if (nativeRows.length > 0 && mcpRows.length === 0) {
+    process.stdout.write(
+      '  caveat: esta petición no trae filas MCP individuales en tools_by_server; las filas\n' +
+        '  `(native)` no atribuyen bytes a servidores MCP concretos. No hay desglose por MCP en esta fila.\n',
+    );
+  }
+
+  process.stdout.write('\n');
 }
 
 async function getJson(baseUrl, path) {
@@ -267,6 +369,200 @@ function classifyRowContext(r) {
   return 'CTX_PARTIALLY_DEFERRED';
 }
 
+// ---------------------------------------------------------------------
+// (d) VALVE INFORMADO MCP — une precio (mcp-savings, vía lib/mcp-snapshot.mjs)
+// con uso observado en el cable (OxideGate, vía lib/mcp-usage.mjs) por
+// servidor. TODA la lógica (el join, joinHealth, la conjunción de
+// recomendación) vive en lib/mcp-valve.mjs — esta sección SÓLO renderiza lo
+// que ese módulo ya decidió; ninguna regla se repite ni se reinventa acá.
+//
+// Sigue la MISMA disciplina que (a)/(b)/(c) arriba: una ausencia nunca se
+// imprime como cero, y una recomendación de "0 usos" siempre lleva su
+// ventana de observación en la MISMA línea — nunca en un encabezado
+// separado, nunca en un párrafo aparte. Un snapshot stale marca esa misma
+// disciplina sobre CADA precio y CADA recomendación que muestra, no sólo un
+// aviso genérico al principio del bloque.
+// ---------------------------------------------------------------------
+
+/** "3h", "45 min", "1h 30min" — nunca una cifra cruda de milisegundos. */
+function humanizeWindowMs(ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return 'ventana desconocida';
+  const totalMinutes = Math.round(ms / 60000);
+  if (totalMinutes < 60) return `${totalMinutes} min`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}min`;
+}
+
+function joinLabelText(join) {
+  return (
+    {
+      exact: 'exacto',
+      sanitized: 'saneado',
+      'snapshot-only': 'sólo en snapshot',
+      ambiguous: 'ambiguo',
+    }[join] ?? join
+  );
+}
+
+/**
+ * Marca de staleness, para adjuntar EN LA MISMA línea que cada precio o
+ * recomendación que la usa — nunca como un aviso separado que un lector
+ * podría no conectar con la cifra de abajo. `valve.snapshotTimestamp` viene
+ * verbatim de `readMcpSavingsSnapshot`, así que la fecha citada es siempre
+ * la medición original, nunca inventada.
+ */
+function staleTag(valve) {
+  if (valve.snapshotFreshness !== 'stale') return '';
+  const age = humanizeWindowMs(Date.now() - valve.snapshotTimestamp);
+  const iso = new Date(valve.snapshotTimestamp).toISOString();
+  return ` [precio DESACTUALIZADO — snapshot de hace ${age}, medido ${iso}]`;
+}
+
+/**
+ * Precio de una fila del valve. NUNCA renderiza `unknown` como un `0`
+ * numérico — ver la invariante de honestidad de lib/mcp-snapshot.mjs. Un
+ * precio conocido pero de un snapshot stale lleva la marca de staleness EN
+ * LA MISMA cadena que la cifra, nunca en una línea separada.
+ */
+function formatPriceForRow(row, valve) {
+  if (!row.price) return 'desconocido (sin entrada de snapshot)';
+  if (row.price.status !== 'known') {
+    const reasonText = row.price.reason === 'cannot-measure' ? 'no se pudo medir' : 'falta el campo bytes';
+    return `desconocido (${reasonText})`;
+  }
+  return `${humanizeBytes(row.price.bytes)}${staleTag(valve)}`;
+}
+
+/**
+ * Cifra de "usos" de una fila. Un `0` real y confirmado es un hallazgo, pero
+ * NUNCA se imprime desnudo — su ventana de observación va SIEMPRE en la
+ * MISMA línea, para que nadie pueda ver "0 usos" sin ver también cuánto
+ * tiempo se observó ese cero.
+ */
+function formatUsesText(row, valve) {
+  if (row.uses === undefined) return 'usos: desconocido (no observable)';
+  if (row.uses === 0) return `0 usos en la ventana observada de ${humanizeWindowMs(valve.windowMs)}`;
+  return `usos observados: ${row.uses}`;
+}
+
+const RECOMMENDATION_REASON_TEXT = {
+  'insufficient-observation': 'todavía no hay suficiente observación para juzgar uso',
+  'instruments-disagree': 'los dos instrumentos no coinciden en ningún servidor',
+  'not-individually-confirmed': 'hay una fila (others) en la ventana: no se puede confirmar individualmente',
+  'name-collision': 'nombre ambiguo — sanitizeServerName() colisiona con otro nombre de snapshot',
+  'unattributed-spend': 'gasto observado que no se puede atribuir a este servidor',
+  'price-unknown': 'no hay precio conocido para este servidor',
+  'in-use': 'está en uso — nada que reportar',
+};
+
+/**
+ * Recomendación de una fila. `candidate-to-disable` SIEMPRE lleva su ventana
+ * de observación en la MISMA oración — nunca un "0 usos" o un "candidato a
+ * desconectar" desnudo. Cuando el snapshot es stale, la marca de staleness
+ * se agrega en esa MISMA oración también.
+ */
+function formatRecommendation(row, valve) {
+  const rec = row.recommendation;
+  if (!rec) return 'sin recomendación';
+  if (rec.status === 'candidate-to-disable') {
+    return (
+      `candidato a desconectar — 0 usos en la ventana observada de ${humanizeWindowMs(valve.windowMs)}` +
+      staleTag(valve)
+    );
+  }
+  if (rec.status === 'already-off') {
+    return (
+      `ya está apagado — costaría ${humanizeBytes(row.price.bytes)} por petición si se habilitara` +
+      staleTag(valve)
+    );
+  }
+  const reasonText = RECOMMENDATION_REASON_TEXT[rec.reason] ?? rec.reason ?? 'razón desconocida';
+  return `sin recomendación (${reasonText})`;
+}
+
+/**
+ * Renderiza la sección (d) completa a partir de `snapshot`
+ * (lib/mcp-snapshot.mjs), `usage` (lib/mcp-usage.mjs) y `valve`
+ * (lib/mcp-valve.mjs — la unión de los dos anteriores). Nunca lanza: los
+ * tres módulos que provee ya degradan defensivamente, así que esta función
+ * sólo tiene que decidir CÓMO mostrar cada combinación, nunca inventar un
+ * dato que ninguno de los tres le dio.
+ */
+function writeMcpValveSection({ snapshot, usage, valve }) {
+  process.stdout.write('\nvalve informado MCP (precio de mcp-savings + uso observado por OxideGate):\n');
+
+  if (snapshot.status !== 'known') {
+    const reasonText =
+      {
+        'missing-file': 'no se encontró el snapshot',
+        'malformed-json': 'el snapshot tiene JSON inválido',
+        'unrecognized-shape': 'el snapshot no tiene la forma esperada',
+        unreadable: 'no se pudo leer el archivo del snapshot',
+      }[snapshot.reason] ?? 'razón desconocida';
+    process.stdout.write(
+      `  sin precio de mcp-savings (${reasonText}): instala y ejecuta mcp-savings para tener precio\n` +
+        '  por servidor. Esto NO es un precio de 0 — es un snapshot ausente o no interpretable.\n',
+    );
+  } else if (valve.snapshotFreshness === 'stale') {
+    process.stdout.write(
+      `  aviso: el snapshot de precios está DESACTUALIZADO — tiene ${humanizeWindowMs(Date.now() - valve.snapshotTimestamp)}\n` +
+        `  (medido ${new Date(valve.snapshotTimestamp).toISOString()}). Cada precio y recomendación de abajo\n` +
+        '  lleva la misma marca en su propia línea.\n',
+    );
+  }
+
+  const mainRows = valve.rows.filter((r) => r.join !== 'unknown');
+  const unknownRows = valve.rows.filter((r) => r.join === 'unknown');
+
+  if (mainRows.length === 0 && unknownRows.length === 0) {
+    process.stdout.write(
+      '  no hay datos de valve para esta ejecución (sin precio de snapshot y sin uso suficiente observado).\n',
+    );
+    return;
+  }
+
+  for (const row of mainRows) {
+    process.stdout.write(
+      `  - ${row.label} [${joinLabelText(row.join)}]: precio=${formatPriceForRow(row, valve)}  ${formatUsesText(row, valve)}\n` +
+        `      ${formatRecommendation(row, valve)}\n`,
+    );
+  }
+
+  // Requisito A: una fila "unknown" (gasto real, sin atribuir) es
+  // CONSPICUA — su propio bloque etiquetado, nunca una fila más de la tabla
+  // de arriba ni una nota al pie. Ver design.md Decisión 6.
+  if (unknownRows.length > 0) {
+    process.stdout.write(
+      '\n  ── GASTO SIN ATRIBUIR (visto en el cable, ningún servidor del snapshot lo reclama) ──\n',
+    );
+    for (const row of unknownRows) {
+      process.stdout.write(
+        `  - ${row.label}: ${row.uses} usos observados, sin precio (ninguna entrada de snapshot corresponde)\n`,
+      );
+    }
+    process.stdout.write(
+      '  Este gasto NO se descarta: aparece acá porque las dos herramientas podrían no estar\n' +
+        '  nombrando este servidor de la misma forma.\n',
+    );
+  }
+
+  if (valve.joinHealth === 'no-correspondence') {
+    process.stdout.write(
+      '\n  aviso: los servidores medidos en el snapshot no coincidieron con NINGÚN tráfico del cable\n' +
+        '  en esta ventana — las dos herramientas podrían no estar nombrando servidores igual. Ninguna\n' +
+        '  recomendación de este bloque se basa en esto.\n',
+    );
+  }
+
+  if (usage.status !== 'observed') {
+    process.stdout.write(
+      `\n  observación insuficiente para recomendar: ${usage.count} petición(es) en una ventana de\n` +
+        `  ${humanizeWindowMs(usage.windowMs)} — todavía no alcanza para juzgar uso.\n`,
+    );
+  }
+}
+
 async function main() {
   const baseUrl = resolveBaseUrl();
   const [requests, stats] = await Promise.all([
@@ -287,6 +583,14 @@ async function main() {
     );
     process.exit(1);
   }
+
+  // (d) valve informado MCP: computado acá (necesita el arreglo COMPLETO de
+  // `requests`, no sólo `entry`, para derivar la ventana de observación) y
+  // renderizado al final de main(), después de las secciones (a)/(b)/(c)
+  // existentes — ver el header del módulo escrito para esta sección.
+  const snapshot = readMcpSavingsSnapshot();
+  const usage = observeMcpUsage(requests);
+  const valve = buildValveRows({ snapshot, usage });
 
   const isAnthropic = entry.upstream === 'anthropic';
 
@@ -311,6 +615,8 @@ async function main() {
     `fuente: ${entry.timestamp ?? '-'}  ${entry.model ?? '-'}  (${entry.upstream ?? '-'})` +
       `  cliente: ${entry.client ?? 'desconocido'}\n\n`,
   );
+
+  writeRequestDashboard(entry);
 
   // ---------------------------------------------------------------------
   // (a) THE TABLE — bytes. mcp is ALWAYS "sí, desconectándolo": its row
@@ -367,9 +673,9 @@ async function main() {
     }
     if (!isAnthropic) {
       process.stdout.write(
-        `Este dialecto (${entry.upstream}) no tiene primitivo de diferido: no existe una versión\n` +
-          'donde estos bytes sean opcionales, para ningún harness. El costo de arriba es real,\n' +
-          'sin ambigüedad — nada que decidir aquí.\n',
+        `Este reporte no usa \`deferred_tools\` para decidir ahorro en tráfico ${entry.upstream}:\n` +
+          'la tabla de bytes sólo dice qué filas MCP llegaron en esta petición. No concluye si el\n' +
+          'harness cargó herramientas de forma diferida o inmediata.\n',
       );
     }
   }
@@ -512,6 +818,12 @@ async function main() {
         'que cambia lo que el agente PUEDE HACER, no sólo lo que carga.\n',
     );
   }
+
+  // ---------------------------------------------------------------------
+  // (d) VALVE INFORMADO MCP — cuarta sección independiente, impresa después
+  // de (a)/(b)/(c) y del caveat de arriba, nunca mezclada con ellas.
+  // ---------------------------------------------------------------------
+  writeMcpValveSection({ snapshot, usage, valve });
 }
 
 try {
