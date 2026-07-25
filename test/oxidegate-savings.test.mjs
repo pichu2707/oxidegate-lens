@@ -1267,3 +1267,100 @@ test('valve informado (d): tools aplanadas -> razón permanente, y el pie NO con
   assertNoUnwindowedRecommendation(assert, stdout);
   assertNoFabricatedZero(assert, stdout);
 });
+
+// =======================================================================
+// --doctor a nivel CLI.
+//
+// Los dos defectos que tuvo eran de CABLEADO, no de lógica, y por eso
+// ninguno de los once tests unitarios del módulo los vio:
+//
+//   1. `getJson` lanza a propósito y el manejador de arriba imprime y sale,
+//      así que el doctor MORÍA antes de diagnosticar — precisamente en los
+//      dos casos para los que existe. Un diagnóstico que se muere con el
+//      paciente no sirve de nada.
+//   2. Con un WordPress ocupando el puerto, /health devolvía 200 (redirige a
+//      wp-admin/install.php) y el doctor afirmaba "el proxy está vivo y
+//      sirviendo" DOS LÍNEAS DESPUÉS de haber descartado que ese servicio
+//      fuera OxideGate.
+//
+// Los dos se vieron ejecutándolo. Este test los fija.
+// =======================================================================
+test('--doctor: con el proxy sano imprime el diagnóstico completo y sale con 0', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [{ server: 'engram', enabled: true, tokens: 100, bytes: 500, ok: true }],
+  });
+  const mock = await startMockOxideGate({ requests: requestsWindow({ count: 3, spanMs: 60_000 }), stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+    args: ['--doctor'],
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0, 'un proxy que responde no puede salir con código de error');
+  assert.match(stdout, /diagnóstico de la cadena/);
+  assert.match(stdout, /El proxy responde/);
+  assert.match(stdout, /peticiones observadas/);
+});
+
+test('--doctor: contra un puerto muerto DIAGNOSTICA en vez de morir', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({ missing: true });
+
+  // Puerto 9 (discard): cerrado en la práctica. Antes, `getJson` lanzaba y
+  // el proceso salía con "fetch failed" sin llegar a diagnosticar nada.
+  const { stdout } = await runSavingsCli({
+    baseUrl: 'http://127.0.0.1:9',
+    claudePath: claude.path,
+    homePath: snap.homePath,
+    args: ['--doctor'],
+  });
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.match(stdout, /diagnóstico de la cadena/, 'debe llegar a diagnosticar');
+  assert.match(stdout, /Nada responde/);
+  assert.doesNotMatch(stdout, /fetch failed/, 'el error crudo no puede sustituir al diagnóstico');
+});
+
+test('--help: responde sin tocar el proxy', async () => {
+  const claude = await knownZeroClaude();
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: 'http://127.0.0.1:9',
+    claudePath: claude.path,
+    args: ['--help'],
+  });
+  await claude.cleanup();
+
+  assert.equal(code, 0, 'la ayuda no depende de que haya un proxy');
+  assert.match(stdout, /oxidegate-savings/);
+  assert.match(stdout, /--doctor/);
+});
+
+test('--doctor: un proxy anterior a 0.3.0 (sin /health) se declara ROTO, y dice por qué', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({ mcpMeasurement: [] });
+  // health:false simula justo el binario que estuvo instalado meses: sirve
+  // /requests pero no /health, así que el enrutado caía a directo en silencio.
+  const mock = await startMockOxideGate({ requests: requestsWindow({ count: 3, spanMs: 60_000 }), stats: [], health: false });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+    args: ['--doctor'],
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 1, 'un eslabón roto tiene que notarse en el código de salida');
+  assert.match(stdout, /health devuelve 404/i);
+  assert.match(stdout, /SILENCIO/i, 'la consecuencia es lo que lo hacía indiagnosticable');
+  assert.match(stdout, /BROKEN/);
+});

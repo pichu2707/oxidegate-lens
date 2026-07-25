@@ -45,7 +45,7 @@ const DEFAULT_TIMEOUT_MS = 8000;
  *   contamination this file already guards against for PATH/`claude`.
  * @returns {Promise<{ stdout: string, stderr: string, code: number | null }>}
  */
-export function runSavingsCli({ baseUrl, claudePath = null, homePath = null, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+export function runSavingsCli({ baseUrl, claudePath = null, homePath = null, args = [], timeoutMs = DEFAULT_TIMEOUT_MS }) {
   return new Promise((resolve, reject) => {
     const env = {
       OXIDEGATE_LENS_URL: baseUrl,
@@ -53,7 +53,7 @@ export function runSavingsCli({ baseUrl, claudePath = null, homePath = null, tim
       HOME: homePath ?? tmpdir(),
     };
 
-    const child = spawn(process.execPath, [CLI_PATH], { env });
+    const child = spawn(process.execPath, [CLI_PATH, ...args], { env });
 
     let stdout = '';
     let stderr = '';
