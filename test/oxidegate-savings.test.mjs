@@ -1111,3 +1111,100 @@ test('valve informado (d): precio "no se pudo medir" (ok:false, bytes:0) nunca s
   assert.ok(!line.includes('0 B'), `precio ok:false NUNCA debe imprimirse como 0 B: ${line}`);
   assertNoFabricatedZero(assert, stdout);
 });
+
+// =======================================================================
+// name-collision a nivel CLI. La rama estaba cubierta en
+// test/mcp-valve.test.mjs (unidad), pero nunca se había atravesado el
+// binario real: un `join: 'ambiguous'` que la unidad calcula bien todavía
+// puede renderizarse como una recomendación en la sección (d) si el
+// formateador lo trata como una fila cualquiera. Este test lee el stdout
+// REAL, que es el único sitio donde ese fallo se vería.
+//
+// `sanitizeServerName` es `name.replace(/[^A-Za-z0-9_]/g, '_')` (verificado
+// en lib/mcp-config.mjs:165-167), así que `pago-api` y `pago.api` colapsan
+// AMBOS en `pago_api`. El cable gasta en `pago_api` y no hay forma honesta
+// de saber a cuál de los dos atribuirlo.
+// =======================================================================
+test('valve informado (d): dos nombres de snapshot que colisionan al sanear -> ambos AMBIGUOS en stdout, ninguno recomendado, el uso jamás atribuido', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({
+    mcpMeasurement: [
+      { server: 'pago-api', enabled: true, tokens: 100, bytes: 500, ok: true },
+      { server: 'pago.api', enabled: true, tokens: 200, bytes: 900, ok: true },
+      // Un tercero que SÍ casa limpio: sin él, la única correspondencia del
+      // fixture sería la colisión, y no podríamos distinguir "se calló por
+      // la colisión" de "se calló porque no hay correspondencia ninguna".
+      { server: 'limpio_server', enabled: true, tokens: 10, bytes: 100, ok: true },
+    ],
+  });
+  const requests = requestsWindow({
+    count: 5,
+    spanMs: 45 * 60 * 1000,
+    mcpRows: [
+      { server: 'pago_api', kind: 'mcp', tools: 2, bytes: 40 },
+      { server: 'limpio_server', kind: 'mcp', tools: 1, bytes: 20 },
+    ],
+  });
+  const mock = await startMockOxideGate({ requests, stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+
+  const lines = stdout.split('\n');
+  const sectionD = lines.slice(lines.findIndex((l) => l.includes('valve informado MCP')));
+  assert.ok(sectionD.length > 0, 'debe existir la sección (d)');
+
+  // 1. Los DOS nombres crudos sobreviven. Elegir uno sería inventarse a cuál
+  //    pertenece el gasto; borrar el otro sería ocultar que existe.
+  for (const raw of ['pago-api', 'pago.api']) {
+    const row = sectionD.find((l) => l.includes(raw));
+    assert.ok(row, `el nombre crudo "${raw}" debe aparecer en la sección (d), no colapsado en el saneado`);
+    assert.ok(row.includes('[ambiguo]'), `"${raw}" debe marcarse como ambiguo: ${row}`);
+    assert.ok(
+      !/\busos observados:\s*\d/.test(row),
+      `"${raw}" no puede reclamar uso del cable: el gasto de pago_api no es atribuible a ninguno de los dos: ${row}`,
+    );
+  }
+
+  // 2. Ninguno de los dos puede acabar recomendado, en ninguna dirección.
+  //    Este es el fallo caro: una colisión tratada como fila normal daría
+  //    "candidato a desconectar" sobre un servidor que quizá está en uso.
+  const ambiguousBlock = sectionD.filter(
+    (l) => l.includes('pago-api') || l.includes('pago.api') || l.includes('nombre ambiguo'),
+  );
+  for (const line of ambiguousBlock) {
+    assert.ok(
+      !line.includes('candidato a desconectar'),
+      `una fila ambigua nunca puede recomendarse para desconectar: ${line}`,
+    );
+  }
+
+  // 3. La razón nombrada llega al usuario. Sin esto, el lector ve "sin
+  //    recomendación" y no sabe si es que falta observación o que el nombre
+  //    es irresoluble — dos problemas con acciones distintas.
+  const collisionReason = sectionD.filter((l) => l.includes('nombre ambiguo'));
+  assert.equal(
+    collisionReason.length,
+    2,
+    'cada fila ambigua debe llevar su propia razón de colisión, no una nota compartida al pie',
+  );
+
+  // 4. El servidor que casa limpio NO queda contaminado por la colisión
+  //    ajena: sigue siendo juzgable.
+  const limpio = sectionD.find((l) => l.includes('limpio_server') && l.includes('precio='));
+  assert.ok(limpio, 'el servidor sin colisión debe seguir renderizando su fila');
+  assert.ok(!limpio.includes('[ambiguo]'), `una colisión ajena no debe marcar a limpio_server: ${limpio}`);
+
+  assertNoDeadCausalArtifacts(assert, stdout);
+  assertNoUnwindowedRecommendation(assert, stdout);
+  assertNoFabricatedZero(assert, stdout);
+  assertNoDroppedSpend(assert, stdout, ['pago_api', 'limpio_server']);
+});
