@@ -111,3 +111,23 @@ test('transitions ride session.idle, since no MCP event exists to subscribe to',
   assert.ok(source.includes("'session.idle'"), 'el sondeo debe colgar de un evento que SÍ se emite');
   assert.ok(source.includes('pollMcpTransitions'), 'y llamar al sondeo desde ahí');
 });
+
+test('the disable switch is read from lib/, not from the environment inline', () => {
+  assert.ok(source.includes('readDisableByDefault'), 'el interruptor debe leerse por lib/, donde hay tests');
+  assert.ok(
+    !/envFlagEnabled\(MCP_DISABLE_BY_DEFAULT_ENV\)/.test(source),
+    'la lectura inline del env var quedó obsoleta al mover el interruptor al config',
+  );
+  assert.ok(
+    !source.includes("const MCP_DISABLE_BY_DEFAULT_ENV ="),
+    'la constante murió con ella: el nombre del env var vive ahora en lib/mcp-protection.mjs',
+  );
+});
+
+test('the startup notice is given prices, so entering already shows what MCP costs', () => {
+  assert.ok(source.includes('readPricesForNotice'), 'el aviso debe poder medir, no solo listar nombres');
+  assert.ok(
+    /startupNotice\(\{[^}]*prices:/s.test(source),
+    'los precios deben llegar a startupNotice, o el usuario ve el estado sin la cifra que lo explica',
+  );
+});

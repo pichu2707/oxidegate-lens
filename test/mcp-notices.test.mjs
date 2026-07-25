@@ -134,3 +134,72 @@ test('an unreadable diff produces no notice rather than a confident one', () => 
 
   assert.equal(notice, null);
 });
+
+// =======================================================================
+// Precios en el aviso de arranque: VER y MEDIR sin pedir nada.
+//
+// Un aviso que dice "empiezas con 1 MCP sin conectar" informa del estado y
+// calla el precio, que es justo el dato por el que existe esta herramienta.
+// Con el precio delante, entrar al programa ya te enseña qué cuesta lo que
+// tienes puesto — sin ejecutar un comando, sin abrir un reporte.
+//
+// Dos reglas heredadas, que aquí siguen mandando:
+//   - Un precio desconocido NO se imprime como cifra. Nunca un 0 inventado.
+//   - Un precio de snapshot viejo lleva su marca de staleness en la MISMA
+//     frase que el número, jamás en una línea aparte que el lector pueda no
+//     conectar con la cifra.
+// =======================================================================
+
+test('el aviso de arranque trae el precio medido de cada servidor', () => {
+  const notice = startupNotice({
+    partition: { status: 'known', connected: ['engram'], notConnected: ['context7'] },
+    plan: { action: 'disable', targets: ['context7'], preserved: ['engram'], unmatchedProtections: [] },
+    prices: { byName: { engram: { status: 'known', bytes: 17233 }, context7: { status: 'known', bytes: 4563 } }, freshness: 'fresh' },
+  });
+
+  assert.match(notice.message, /17\.2 kB/, 'el que sigue puesto debe mostrar lo que cuesta');
+  assert.match(notice.message, /4\.6 kB/, 'el que se desconectó también: es la medida de lo que deja de viajar');
+});
+
+test('un precio desconocido no se convierte en una cifra', () => {
+  const notice = startupNotice({
+    partition: { status: 'known', connected: ['engram'], notConnected: ['sin_precio'] },
+    plan: { action: 'disable', targets: ['sin_precio'], preserved: ['engram'], unmatchedProtections: [] },
+    prices: { byName: { engram: { status: 'known', bytes: 17233 }, sin_precio: { status: 'unknown', reason: 'cannot-measure' } }, freshness: 'fresh' },
+  });
+
+  const linea = notice.message;
+  assert.match(linea, /sin_precio/);
+  assert.doesNotMatch(linea, /sin_precio \(0/, 'una ausencia de precio jamás se imprime como cero');
+});
+
+test('un snapshot viejo marca la staleness en la MISMA frase que la cifra', () => {
+  const notice = startupNotice({
+    partition: { status: 'known', connected: ['engram'], notConnected: [] },
+    plan: { action: 'nothing-to-do', preserved: ['engram'], unmatchedProtections: [] },
+    prices: { byName: { engram: { status: 'known', bytes: 17233 } }, freshness: 'stale' },
+  });
+
+  assert.ok(notice, 'con precios que enseñar, hay algo que decir aunque no se desconectara nada');
+  assert.match(notice.message, /17\.2 kB[^.]*desactualizado/i, 'la marca debe ir pegada al número, no en otra frase');
+});
+
+test('sin precios disponibles el aviso sigue funcionando, solo que sin cifras', () => {
+  const notice = startupNotice({
+    partition: { status: 'known', connected: ['engram'], notConnected: ['context7'] },
+    plan: { action: 'disable', targets: ['context7'], preserved: ['engram'], unmatchedProtections: [] },
+  });
+
+  assert.ok(notice, 'la falta de snapshot no puede tumbar el aviso de estado');
+  assert.match(notice.message, /context7/);
+});
+
+test('el aviso dice cómo MANIPULAR, no solo qué pasó', () => {
+  const notice = startupNotice({
+    partition: { status: 'known', connected: ['engram'], notConnected: ['context7'] },
+    plan: { action: 'disable', targets: ['context7'], preserved: ['engram'], unmatchedProtections: [] },
+  });
+
+  // Ver y medir sin poder actuar deja al usuario con un dato y sin salida.
+  assert.match(notice.message, /oxidegate_lens_mcp_connect/, 'debe nombrar la herramienta que revierte esto');
+});
