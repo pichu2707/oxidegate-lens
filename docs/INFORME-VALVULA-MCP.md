@@ -3,8 +3,10 @@
 | | |
 |---|---|
 | **Fecha** | 25 de julio de 2026 |
-| **Repositorio** | `oxidegate-lens` — `main` en `62b7de9` |
-| **Versiones** | oxidegate-lens 0.3.0 · OxideGate 0.3.1 · OpenCode 1.18.5 |
+| **Repositorio** | `oxidegate-lens` — `main` en `65b1723` |
+| **Versiones** | oxidegate-lens 0.4.0 · OxideGate 0.3.1 · OpenCode 1.18.5 |
+| **Estado** | 186 tests en verde · 23 commits · 2 binarios publicados |
+| **Seguimiento** | [Project «OxideGate + Lens»](https://github.com/users/pichu2707/projects/12) |
 
 > Todas las cifras de este documento están **medidas**, no estimadas. Cada una
 > procede de una ejecución real contra un OxideGate corriendo, del snapshot que
@@ -64,13 +66,28 @@ de "sí" y "no", que es **"no lo sé"**.
 | `lib/mcp-protection.mjs` | Qué está protegido y qué se puede tocar | ✅ |
 | `lib/mcp-transitions.mjs` | Diff entre dos lecturas de estado | ✅ |
 | `lib/mcp-notices.mjs` | Los mensajes que lee el usuario | ✅ |
+| `lib/mcp-config-editor.mjs` | El selector: estado, teclas y render | ✅ |
 | `bin/oxidegate-savings.mjs` | Reporte por terminal | — |
+| `bin/oxidegate-mcp.mjs` | Selector interactivo | — |
 | `opencode/oxidegate-lens.ts` | Adaptador fino sobre `lib/` | — |
 
 **Decisión de diseño 1:** el plugin es TypeScript y no se puede ejecutar con
 el runner del repo (`node --test` sobre `.mjs`). Por eso **toda la lógica vive
 en `lib/`**, que sí es testeable, y el plugin solo cablea. Los tests estáticos
 fallan si esa lógica empieza a filtrarse de vuelta al plugin.
+
+La misma regla se aplicó después a la TUI del selector, que es todavía menos
+testeable que el plugin: modo raw de teclado, secuencias de escape, un
+terminal que solo existe cuando hay alguien mirando. `renderEditor` **devuelve
+un string** en vez de pintar, y `bin/oxidegate-mcp.mjs` se queda con las tres
+cosas que ninguna función pura puede hacer — leer teclas, escribir en pantalla
+y tocar el disco.
+
+**Y la regla se rompió tres veces en ese mismo fichero**, lo que dice más de
+su necesidad que cualquier argumento: primero la fusión del `config.json`,
+después el pie con la ruta, y en ambos casos la lógica nació dentro del
+binario y hubo que moverla. El guardarraíl estático no es ceremonia; es lo
+único que se ha dado cuenta.
 
 ---
 
@@ -311,6 +328,10 @@ verificado" general.
 | `session.idle` dispara | Conexión manual → aviso en el siguiente reposo |
 | Silencio sin cambios | Los reposos vacíos no produjeron ningún aviso |
 | Pipeline completo | Ejecutado contra snapshot real y `/requests` real |
+| Aviso de conexión | Conexión manual → aviso en el siguiente reposo. **`session.idle` sí dispara** |
+| Silencio sin cambios | Los reposos sin movimiento no produjeron ningún aviso |
+| Interruptor en config | Plugin conducido **sin ninguna variable de entorno** |
+| Selector sin TTY | Degrada a imprimir el estado; `--help` responde; `| head` no revienta |
 | Interruptor en config | Plugin conducido **sin ninguna variable de entorno** |
 
 **Detalle que solo aparece ejecutando:** tras un `disconnect`, el SDK devuelve
@@ -331,11 +352,12 @@ cadena fija.
 
 ### Tests
 
-**164 tests, 0 fallos.** Distribución:
+**186 tests, 0 fallos.** Distribución:
 
 ```
 oxidegate-savings.test.mjs    32  ████████████████
 mcp-valve.test.mjs            25  ████████████
+mcp-config-editor.test.mjs    22  ███████████
 mcp-protection.test.mjs       21  ██████████
 mcp-usage.test.mjs            17  ████████
 mcp-notices.test.mjs          16  ████████
@@ -366,12 +388,15 @@ invariante crítica se sometió a una mutación que debía matarla:
 | Quitar la precedencia del aplanado | `flattened outranks` |
 | Coercer el interruptor en vez de exigir boolean | `non-boolean is UNKNOWN` |
 | Override que solo puede encender | `env can also turn it OFF` |
+| Snapshot ausente degradado a lista vacía | `absent snapshot is NOT an empty list` |
+| Descartar protegidos que el snapshot no conoce | `protected name … still gets a row` |
+| Sobrescribir el config en vez de fusionar | `conserva claves ajenas` |
 
-Doce mutaciones, cada una mató **exactamente** su test y ningún otro.
+Quince mutaciones, cada una mató **exactamente** su test y ningún otro.
 
 ### Commits
 
-19 commits, cada uno una unidad de trabajo verificada en verde por separado.
+23 commits, cada uno una unidad de trabajo verificada en verde por separado.
 
 ---
 
@@ -396,6 +421,63 @@ Para volver a abrir alguno: oxidegate_lens_mcp_connect. Detalle completo: oxideg
 **Ver** el estado, **medir** el coste y **saber cómo revertirlo**, sin
 ejecutar ningún comando.
 
+### El selector: elegir sin editar JSON
+
+```
+oxidegate-mcp
+```
+
+```
+  Servidores MCP — elige cuáles se preservan al arrancar
+
+  > ● engram        17.2 kB   se preserva
+    ○ context7       4.6 kB   se desconecta al arrancar
+
+  Desconectar al arrancar: ACTIVADO
+
+  Se guarda en: ~/.config/oxidegate-lens/config.json
+  Lo aplica: el plugin de OpenCode. En pi, Codex CLI u otros harnesses
+  este fichero se guarda pero HOY no lo lee nadie.
+
+  ↑↓ mover · espacio preservar/desconectar · d interruptor · enter guardar · q salir
+```
+
+Con **el precio al lado de cada servidor**, que es la mitad del valor: no se
+elige a ciegas, se elige sabiendo qué cuesta cada uno.
+
+Funciona **sin OpenCode**, a propósito. La configuración es del usuario, no
+del harness, así que sirve igual con `pi` o con lo que venga. Lo que **no**
+puede hacer es tocar una sesión en marcha: eso necesita el SDK del harness y
+vive en el plugin.
+
+Tres reglas que el módulo defiende, y las tres son la misma invariante de
+siempre aplicada a una pantalla:
+
+- **Un snapshot ausente no es una lista vacía.** Pintar un selector vacío
+  diría *«no tienes MCPs»*, que es una afirmación. Lo único que se sabe es que
+  no se pudo leer el fichero, así que se dice eso y se sale con código 1.
+- **Un nombre protegido que el snapshot no conoce sigue saliendo**, marcado
+  como sin medir y sin precio inventado. Servidor apagado y nombre mal escrito
+  son indistinguibles desde ahí — pero borrarlo de la pantalla lo borraría del
+  fichero al guardar.
+- **Marcar protegidos con el interruptor apagado no protege de nada**, así que
+  la pantalla lo dice en vez de dejar rellenar una lista que hoy no hace nada.
+
+Y se guarda **fusionando**: si el fichero tiene otras claves, no son nuestras
+y no se tocan.
+
+#### El fallo silencioso que tuvo, y por qué era el peor posible
+
+La primera versión decía **dónde** se guarda la configuración y nunca **quién
+la lee**. En `pi` o en Codex CLI eso significaba marcar servidores, ver la
+ruta, y creer que se había configurado algo — cuando el único consumidor de
+ese fichero es el plugin de OpenCode.
+
+Guardaba bien y no aplicaba nada. **Sin error que buscar**, que es la peor
+forma de fallar: no hay nada que investigar, solo una impresión falsa. Las dos
+líneas del pie de arriba son el arreglo, y van dentro de `renderEditor` para
+que sea imposible pintar el selector sin ellas.
+
 ### Por qué el interruptor no vive en una variable de entorno
 
 Estuvo en `OXIDEGATE_MCP_DISABLE_BY_DEFAULT` y falló una prueba real: **el
@@ -412,18 +494,66 @@ Las dos variables siguen funcionando y **ganan** cuando están definidas, en
 
 ---
 
-## 10. Lo que queda abierto
+## 10. La vía para levantar el techo
 
-| # | Asunto | Naturaleza |
+El límite de la §4 —que el cable no conserva la atribución— resultó **no ser
+insalvable**. Y llegar ahí exigió desenterrar por qué ya se había intentado.
+
+### Lo que se intentó antes, y por qué se rechazó bien
+
+OxideGate **#5** pedía exactamente esto: *«atribuye tools por servidor MCP en
+clientes que los aplanan»*. Se cerró con el PR **#9**, y **la decisión fue
+correcta**:
+
+> OpenCode manda `engram_mem_search` separado por `_`, que colisiona con
+> nativas como `apply_patch` o `delegation_list`. Una heurística de nombres
+> habría misatribuido `delegation` como si fuera un servidor.
+
+En una herramienta de honestidad eso es inaceptable. Por eso enviaron
+`tools_flattened`: la admisión honesta de *«no puedo atribuir»* en lugar de
+una atribución fabricada. Es la misma disciplina que rige todo este informe.
+
+### Por qué la propuesta nueva sí puede funcionar
+
+La diferencia es entera: **#5 pedía que OxideGate DEDUJERA el servidor.** La
+propuesta actual ([OxideGate#19](https://github.com/pichu2707/OxideGate/issues/19))
+pide que **no deduzca nada** — que publique los nombres que ya parsea, porque
+es imposible contar 40 tools y sumar 48.172 bytes sin haberlos leído — y que
+el cruce lo haga la lens contra la lista exacta del snapshot.
+
+| Cliente | Manda en el cable | El snapshot declara | Resultado |
+|---|---|---|---|
+| OpenCode | `engram_mem_search` | `engram` → `mem_search` | casa por los dos extremos |
+| `pi` | `mem_search` (crudo) | `engram` → `mem_search` | casa exacto |
+| cualquiera | `delegation_list` | no está en ninguna lista MCP | **no casa → sigue nativa** |
+
+La tercera fila es justo el fallo que temían, y no puede ocurrir.
+
+**La razón de fondo por la que #5 no era resoluble tal como se planteó: le
+pedía a OxideGate una respuesta que no tiene datos para dar.** No tiene el
+snapshot. Cada instrumento sabe la mitad, y la solución exige a los dos.
+
+---
+
+## 11. Lo que queda abierto
+
+| # | Asunto | Estado |
 |---|---|---|
-| 1 | La matriz de harnesses pregunta *"¿es medible?"*, que ya no es la pregunta que decide. Falta la columna **"¿conserva atribución?"** | Documentación |
-| 2 | La fila de `pi.dev` dice *"Probable (pendiente)"* de medir, cuando hay 7 peticiones reales capturadas | Documentación desactualizada |
-| 3 | El fetch-patch solo reescribe la URL **exacta** de Codex. Cualquier modelo no-Codex no pasa por el proxy | Producto |
-| 4 | Ese patch no se distribuye: está escrito a mano en la máquina del mantenedor | Producto |
-| 5 | Hook `tool.execute.after` sin verificar contra OpenCode real | Verificación |
-| 6 | Fase 5 en `mcp-savings`: `saveSnapshot` atómico y retirar `panel.ts` | Otro repositorio |
+| [OxideGate#19](https://github.com/pichu2707/OxideGate/issues/19) | Exponer los nombres de tools aplanadas | Abierto — desbloquea el techo de la §4 |
+| [lens#5](https://github.com/pichu2707/oxidegate-lens/issues/5) | Consumirlos para atribuir | **Bloqueado** por #19 |
+| [lens#7](https://github.com/pichu2707/oxidegate-lens/issues/7) | Decidir si habrá plugin para `pi`, o decir que no | Abierto y decidible hoy |
+| — | Hook `tool.execute.after` sin verificar contra OpenCode real | Necesita sesión viva |
+| — | El fetch-patch solo reescribe la URL **exacta** de Codex; los modelos no-Codex no pasan por el proxy | Producto |
+| — | Ese patch no se distribuye: está escrito a mano en la máquina del mantenedor | Producto |
+| — | Fase 5 en `mcp-savings`: `saveSnapshot` atómico y retirar `panel.ts` | Otro repositorio |
 
-### La pregunta de producto que sale de todo esto
+Seguimiento en el [project «OxideGate + Lens»](https://github.com/users/pichu2707/projects/12).
+
+**Cerrado desde la primera versión de este informe:** la matriz de harnesses
+ya no confunde *medible* con *utilizable* (párrafo con lo medido, no columna
+con conjeturas), y la fila de `pi.dev` pasó a «verificado».
+
+## 12. La pregunta de producto que sale de todo esto
 
 La válvula informada se diseñó para responder *"¿qué MCP puedo desconectar
 porque no lo uso?"*. Medido: **esa pregunta no se puede responder en los

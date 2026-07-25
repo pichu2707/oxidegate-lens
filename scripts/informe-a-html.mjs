@@ -99,6 +99,11 @@ const isBlockStart = (l) =>
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const inline = (s) =>
   esc(s)
+    // Enlaces ANTES que el resto: el texto del enlace puede llevar negrita o
+    // código, y la URL no debe pasar por esos reemplazos. Faltaba porque
+    // hasta que el informe citó issues no había ni un `[texto](url)`, y se
+    // veía el markdown en crudo en el PDF.
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2">$1</a>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[\s(])\*([^*]+)\*/g, '$1<em>$2</em>');
@@ -206,6 +211,7 @@ pre code { background:none; color:inherit; font-size:8.5pt; line-height:1.45; }
 blockquote { border-left:4px solid #8b5cf6; background:#faf5ff; margin:12px 0; padding:9px 14px; color:#4c1d95; page-break-inside:avoid; }
 figure { margin:16px 0; text-align:center; page-break-inside:avoid; }
 figure svg { max-width:100%; height:auto; }
+a { color:#6d28d9; text-decoration:none; border-bottom:1px solid #ddd6fe; }
 hr { border:none; border-top:1px solid #e2e8f0; margin:22px 0; }
 ul,ol { padding-left:22px; }
 li { margin:3px 0; }
