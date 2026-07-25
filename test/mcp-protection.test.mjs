@@ -19,7 +19,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { readProtectedServers, resolveProtectionConfigPath } from '../lib/mcp-protection.mjs';
+import { readProtectedServers, readDisableByDefault as readDisableByDefaultFn, resolveProtectionConfigPath } from '../lib/mcp-protection.mjs';
 
 /** Writes a throwaway config file and returns its path plus a cleanup. */
 async function withConfig(content) {
@@ -281,5 +281,99 @@ test('readDisableByDefault: an unreadable config is UNKNOWN, and unknown must no
 
   assert.equal(result.status, 'unknown');
   assert.equal(result.reason, 'malformed-json');
+  assert.equal(result.enabled, undefined);
+});
+
+// =======================================================================
+// La capa de proyecto en la precedencia.
+//
+// Decidido con el usuario: env var > proyecto (si está aprobado) > global >
+// por defecto. Y el proyecto REEMPLAZA a lo global, no se fusiona — es una
+// decisión de seguridad, y ahí la previsibilidad vale más que la comodidad:
+// lees un fichero y sabes la respuesta, en vez de componer dos mentalmente.
+//
+// El resultado de `readProjectConfig` lo pasa el LLAMADOR ya leído, para que
+// estas funciones sigan siendo puras y el fichero no se lea dos veces.
+// =======================================================================
+
+const projectApproved = (config) => ({ status: 'approved', path: '/repo/.oxidegate-lens.json', config });
+
+test('proyecto aprobado REEMPLAZA la lista global, no la fusiona', async () => {
+  const { path, cleanup } = await withConfig(JSON.stringify({ protectedMcpServers: ['global-uno', 'global-dos'] }));
+  const result = readProtectedServers({
+    path,
+    env: {},
+    projectConfig: projectApproved({ protectedMcpServers: ['solo-del-proyecto'] }),
+  });
+  await cleanup();
+
+  assert.deepEqual(result.servers, ['solo-del-proyecto'], 'lo global no se arrastra');
+  assert.equal(result.source, 'project');
+});
+
+test('un proyecto PENDIENTE no se aplica: manda lo global', async () => {
+  const { path, cleanup } = await withConfig(JSON.stringify({ protectedMcpServers: ['global'] }));
+  const result = readProtectedServers({
+    path,
+    env: {},
+    projectConfig: { status: 'pending', path: '/repo/.oxidegate-lens.json', approvalHash: 'abc' },
+  });
+  await cleanup();
+
+  assert.deepEqual(result.servers, ['global']);
+  assert.equal(result.source, 'file', 'sin aprobar, el proyecto no existe a efectos de precedencia');
+});
+
+test('la env var sigue ganando incluso a un proyecto aprobado', async () => {
+  const { path, cleanup } = await withConfig(JSON.stringify({ protectedMcpServers: ['global'] }));
+  const result = readProtectedServers({
+    path,
+    env: { OXIDEGATE_MCP_ALLOWLIST: 'del-entorno' },
+    projectConfig: projectApproved({ protectedMcpServers: ['del-proyecto'] }),
+  });
+  await cleanup();
+
+  assert.deepEqual(result.servers, ['del-entorno'], 'la variable es la vía de escape y no se le quita');
+  assert.equal(result.source, 'env');
+});
+
+test('un proyecto aprobado que no habla de protección cae a lo global', async () => {
+  const { path, cleanup } = await withConfig(JSON.stringify({ protectedMcpServers: ['global'] }));
+  const result = readProtectedServers({
+    path,
+    env: {},
+    projectConfig: projectApproved({ disableByDefault: true }),
+  });
+  await cleanup();
+
+  // Reemplazar sólo aplica a lo que el proyecto DECLARA. Callar sobre una
+  // clave no es declararla vacía — la misma regla que en el fichero global.
+  assert.deepEqual(result.servers, ['global']);
+  assert.equal(result.source, 'file');
+});
+
+test('el interruptor también respeta la capa de proyecto', async () => {
+  const { path, cleanup } = await withConfig(JSON.stringify({ disableByDefault: false }));
+  const result = readDisableByDefaultFn({
+    path,
+    env: {},
+    projectConfig: projectApproved({ disableByDefault: true }),
+  });
+  await cleanup();
+
+  assert.equal(result.enabled, true);
+  assert.equal(result.source, 'project');
+});
+
+test('un proyecto aprobado con un interruptor no booleano es UNKNOWN, no se coacciona', async () => {
+  const { path, cleanup } = await withConfig(JSON.stringify({ disableByDefault: false }));
+  const result = readDisableByDefaultFn({
+    path,
+    env: {},
+    projectConfig: projectApproved({ disableByDefault: 'sí' }),
+  });
+  await cleanup();
+
+  assert.equal(result.status, 'unknown');
   assert.equal(result.enabled, undefined);
 });

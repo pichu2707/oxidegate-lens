@@ -46,6 +46,7 @@ import { buildValveRows } from '../lib/mcp-valve.mjs';
 import { readProtectedServers, planMcpDisable, readDisableByDefault } from '../lib/mcp-protection.mjs';
 import { diffMcpStatus, partitionByConnected } from '../lib/mcp-transitions.mjs';
 import { startupNotice, transitionNotice } from '../lib/mcp-notices.mjs';
+import { readProjectConfig, readApprovals } from '../lib/mcp-project-config.mjs';
 
 // OxideGate's own default. Kept deliberately in sync with it — but 8080 is a
 // crowded port (Apache, Tomcat, Jenkins all squat it), so if OxideGate is
@@ -232,7 +233,19 @@ async function disableMcpServersByDefault(client: any, directory: string | undef
   // the env var still winning when defined. It used to be env-only, and that
   // failed a real test: this feature's own author launched OpenCode without
   // exporting it, so the whole thing silently never ran.
-  const _switch = readDisableByDefault({});
+  // Capa de proyecto. `directory` es el proyecto en el que OpenCode abrió, y
+  // sólo cuenta si está APROBADO — un .oxidegate-lens.json de un repo clonado
+  // es código ajeno. Ver lib/mcp-project-config.mjs.
+  const projectConfig = readProjectConfig({ cwd: directory, approvals: readApprovals({}) });
+  if (projectConfig.status === 'pending') {
+    console.warn(
+      `[oxidegate-lens] hay una configuración de proyecto SIN aprobar en ${projectConfig.path} ` +
+        `(contenido ${projectConfig.approvalHash}); NO se está aplicando. Revísala y apruébala ` +
+        'con `oxidegate-mcp --approve` si te parece bien.',
+    );
+  }
+
+  const _switch = readDisableByDefault({ projectConfig });
   if (_switch.status !== 'known' || !_switch.enabled) {
     if (_switch.status !== 'known') {
       console.warn(
@@ -247,7 +260,7 @@ async function disableMcpServersByDefault(client: any, directory: string | undef
     const status = unwrapSdkResponse(await client.mcp.status({ query }));
     lastKnownMcpStatus = status;
     const servers = mcpServerNames(status);
-    const protection = readProtectedServers({});
+    const protection = readProtectedServers({ projectConfig });
     const plan = planMcpDisable({ servers, protection });
 
     // A refusal means we could not read what the user protected. Disconnect

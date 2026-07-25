@@ -378,6 +378,49 @@ en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
 
 ### Avisos de MCP y servidores protegidos
 
+### Configuración por proyecto
+
+Un proyecto puede declarar la suya en `.oxidegate-lens.json`, en su raíz:
+
+```json
+{
+  "disableByDefault": true,
+  "protectedMcpServers": ["engram"]
+}
+```
+
+**Reemplaza a la global en lo que declara** — no se fusiona. Un fichero, una
+respuesta. Callar sobre una clave no es declararla vacía: un proyecto que solo
+toca el interruptor no borra la lista de nadie.
+
+La precedencia completa, de más fuerte a más débil:
+
+```
+variables de entorno  >  proyecto (si está aprobado)  >  global  >  por defecto
+```
+
+#### Y no se aplica hasta que lo apruebes
+
+Un fichero de configuración dentro de un repo que clonaste **es código ajeno**.
+Puede desconectar servidores MCP que querías conservar, o —peor, porque es
+silencioso— marcar como protegido uno que querías apagar. Así que no se aplica
+solo:
+
+```
+oxidegate-mcp --approve
+```
+
+Te enseña el fichero **antes** de aprobarlo, porque aprobar a ciegas no es
+consentir.
+
+**La aprobación es del CONTENIDO, no de la ruta** — el modelo de `direnv`. Si
+el fichero cambia, por una edición tuya o por un `git pull`, vuelve a pedirse.
+Aprobar una ruta para siempre dejaría que el repositorio cambiara el fichero
+mañana y se aplicara sin que te enteres.
+
+Mientras esté pendiente no es silencioso: lo dicen el plugin al arrancar y
+`oxidegate-savings --doctor`, con el hash y qué hacer.
+
 ### Comprobar que todo está conectado
 
 ```

@@ -27,6 +27,11 @@ import {
   resolveProtectionConfigPath,
 } from '../lib/mcp-protection.mjs';
 import {
+  readProjectConfig,
+  readApprovals,
+  resolveApprovalsPath,
+} from '../lib/mcp-project-config.mjs';
+import {
   buildEditorState,
   moveCursor,
   toggleAtCursor,
@@ -40,6 +45,7 @@ const HELP = `oxidegate-mcp — elige qué servidores MCP se preservan al arranc
 USO:
     oxidegate-mcp              Selector interactivo (necesita un terminal)
     oxidegate-mcp --print      Imprime la configuración actual y sale
+    oxidegate-mcp --approve    Aprueba el .oxidegate-lens.json de este proyecto
     oxidegate-mcp --help       Muestra esta ayuda
 
 TECLAS (modo interactivo):
@@ -67,12 +73,65 @@ function wants(args, ...flags) {
 }
 
 /** Lee el estado actual desde las mismas fuentes que lee el plugin. */
+function loadProject() {
+  return readProjectConfig({ cwd: process.cwd(), approvals: readApprovals({}) });
+}
+
 function loadState() {
+  const projectConfig = loadProject();
   return buildEditorState({
     snapshot: readMcpSavingsSnapshot({}),
-    protection: readProtectedServers({ env: {} }),
-    switchResult: readDisableByDefault({ env: {} }),
+    protection: readProtectedServers({ env: {}, projectConfig }),
+    switchResult: readDisableByDefault({ env: {}, projectConfig }),
   });
+}
+
+/**
+ * Aprueba la configuración de proyecto del directorio actual.
+ *
+ * La aprobación es del CONTENIDO, no de la ruta: se guarda el hash, así que
+ * cualquier edición posterior —tuya o de un `git pull`— vuelve a pedir
+ * permiso. Es el modelo de `direnv`, y existe porque un fichero de config
+ * dentro de un repo clonado es código ajeno que puede desconectar servidores
+ * MCP que querías conservar.
+ */
+function approveProject() {
+  const project = loadProject();
+  if (project.status === 'none') {
+    process.stdout.write('\n  No hay ninguna configuración de proyecto aquí que aprobar.\n\n');
+    process.exitCode = 1;
+    return;
+  }
+  if (project.status === 'approved') {
+    process.stdout.write(`\n  Ya estaba aprobada: ${project.path}\n\n`);
+    return;
+  }
+  if (project.status === 'unreadable') {
+    process.stdout.write(`\n  No se puede aprobar lo que no se puede leer: ${project.path} (${project.reason}).\n\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // Se le enseña ANTES de aprobar. Aprobar a ciegas no es consentir.
+  process.stdout.write(`\n  Vas a aprobar este fichero:\n\n      ${project.path}\n\n`);
+  try {
+    process.stdout.write(`${readFileSync(project.path, 'utf8').trimEnd()}\n\n`);
+  } catch {
+    // Se leyó hace un instante para calcular el hash; si falla ahora, seguir
+    // sin mostrarlo es peor que abortar.
+    process.stdout.write('  (no se pudo releer para mostrarlo — no se aprueba)\n\n');
+    process.exitCode = 1;
+    return;
+  }
+
+  const approvalsPath = resolveApprovalsPath();
+  const approvals = readApprovals({});
+  approvals[project.path] = project.approvalHash;
+  mkdirSync(dirname(approvalsPath), { recursive: true });
+  writeFileSync(approvalsPath, `${JSON.stringify(approvals, null, 2)}\n`);
+
+  process.stdout.write(`  Aprobado (contenido ${project.approvalHash}).\n`);
+  process.stdout.write('  Si el fichero cambia, volverá a pedirse.\n\n');
 }
 
 /**
@@ -177,6 +236,11 @@ function main() {
   const args = process.argv;
   if (wants(args, '--help', '-h')) {
     process.stdout.write(HELP);
+    return;
+  }
+
+  if (wants(args, '--approve')) {
+    approveProject();
     return;
   }
 

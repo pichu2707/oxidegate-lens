@@ -118,6 +118,7 @@ import { observeMcpUsage } from '../lib/mcp-usage.mjs';
 import { buildValveRows } from '../lib/mcp-valve.mjs';
 import { readProtectedServers, readDisableByDefault } from '../lib/mcp-protection.mjs';
 import { diagnose } from '../lib/mcp-doctor.mjs';
+import { readProjectConfig, readApprovals } from '../lib/mcp-project-config.mjs';
 
 const DEFAULT_PORT = 8080;
 
@@ -641,6 +642,10 @@ async function runDoctor(baseUrl) {
     // de la ruta. El módulo lo traduce a 'unknown', nunca a 'ok'.
   }
 
+  // El proyecto se lee UNA vez y se pasa a los dos lectores: así no se lee
+  // el fichero dos veces ni se duplica la lógica de confianza.
+  const projectConfig = readProjectConfig({ cwd: process.cwd(), approvals: readApprovals({}) });
+
   const rows = isOxidegate ? requests : [];
   const withTools = rows.filter((r) => r && r.context_tools_bytes > 0);
 
@@ -652,8 +657,9 @@ async function runDoctor(baseUrl) {
     requestCount: isOxidegate ? rows.length : null,
     flattened: withTools.some((r) => r.tools_flattened === true),
     snapshot: readMcpSavingsSnapshot({}),
-    protection: readProtectedServers({}),
-    switchResult: readDisableByDefault({}),
+    protection: readProtectedServers({ projectConfig }),
+    switchResult: readDisableByDefault({ projectConfig }),
+    projectConfig,
   });
 
   const MARK = { ok: '✔', warn: '!', fail: '✖', unknown: '?' };
