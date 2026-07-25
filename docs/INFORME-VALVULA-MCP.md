@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Fecha** | 25 de julio de 2026 |
-| **Repositorio** | `oxidegate-lens` — `main` en `65b1723` |
+| **Repositorio** | `oxidegate-lens` — `main` en `86c8656` |
 | **Versiones** | oxidegate-lens 0.4.0 · OxideGate 0.3.1 · OpenCode 1.18.5 |
-| **Estado** | 186 tests en verde · 23 commits · 2 binarios publicados |
+| **Estado** | 238 tests en verde · 28 commits · 2 binarios publicados |
 | **Seguimiento** | [Project «OxideGate + Lens»](https://github.com/users/pichu2707/projects/12) |
 
 > Todas las cifras de este documento están **medidas**, no estimadas. Cada una
@@ -67,6 +67,8 @@ de "sí" y "no", que es **"no lo sé"**.
 | `lib/mcp-transitions.mjs` | Diff entre dos lecturas de estado | ✅ |
 | `lib/mcp-notices.mjs` | Los mensajes que lee el usuario | ✅ |
 | `lib/mcp-config-editor.mjs` | El selector: estado, teclas y render | ✅ |
+| `lib/mcp-project-config.mjs` | Config por proyecto y su modelo de confianza | ✅ |
+| `lib/mcp-doctor.mjs` | Diagnóstico de la cadena completa | ✅ |
 | `bin/oxidegate-savings.mjs` | Reporte por terminal | — |
 | `bin/oxidegate-mcp.mjs` | Selector interactivo | — |
 | `opencode/oxidegate-lens.ts` | Adaptador fino sobre `lib/` | — |
@@ -359,16 +361,18 @@ cadena fija.
 
 ### Tests
 
-**186 tests, 0 fallos.** Distribución:
+**238 tests, 0 fallos.** Distribución:
 
 ```
-oxidegate-savings.test.mjs    32  ████████████████
-mcp-valve.test.mjs            25  ████████████
+oxidegate-savings.test.mjs    36  ██████████████████
+mcp-valve.test.mjs            31  ███████████████
+mcp-protection.test.mjs       27  █████████████
 mcp-config-editor.test.mjs    22  ███████████
-mcp-protection.test.mjs       21  ██████████
-mcp-usage.test.mjs            17  ████████
+mcp-usage.test.mjs            21  ██████████
 mcp-notices.test.mjs          16  ████████
-mcp-snapshot.test.mjs         11  █████
+mcp-snapshot.test.mjs         15  ███████
+mcp-project-config.test.mjs   14  ███████
+mcp-doctor.test.mjs           14  ███████
 mcp-transitions.test.mjs      10  █████
 plugin-tools.test.mjs         10  █████
 sdk-response.test.mjs         10  █████
@@ -398,12 +402,14 @@ invariante crítica se sometió a una mutación que debía matarla:
 | Snapshot ausente degradado a lista vacía | `absent snapshot is NOT an empty list` |
 | Descartar protegidos que el snapshot no conoce | `protected name … still gets a row` |
 | Sobrescribir el config en vez de fusionar | `conserva claves ajenas` |
+| Aplicar un config de proyecto sin aprobarlo | 3 tests del modelo de confianza |
+| Aprobar por RUTA en vez de por contenido | `si el CONTENIDO cambia, vuelve a pendiente` |
 
-Quince mutaciones, cada una mató **exactamente** su test y ningún otro.
+Diecisiete mutaciones, cada una mató **exactamente** su test y ningún otro.
 
 ### Commits
 
-23 commits, cada uno una unidad de trabajo verificada en verde por separado.
+28 commits, cada uno una unidad de trabajo verificada en verde por separado.
 
 ---
 
@@ -485,6 +491,49 @@ forma de fallar: no hay nada que investigar, solo una impresión falsa. Las dos
 líneas del pie de arriba son el arreglo, y van dentro de `renderEditor` para
 que sea imposible pintar el selector sin ellas.
 
+### Configuración por proyecto, y por qué no se aplica sola
+
+Un proyecto puede declarar la suya en `.oxidegate-lens.json`. **Reemplaza a la
+global en lo que declara**, no se fusiona — se lee un fichero y se sabe la
+respuesta, en vez de componer dos mentalmente. Precedencia completa:
+
+```
+variables de entorno  >  proyecto (si está aprobado)  >  global  >  por defecto
+```
+
+Y **no se aplica hasta aprobarlo**. Un fichero de configuración dentro de un
+repositorio clonado es **código ajeno**: puede desconectar servidores MCP que
+querías conservar, o —peor, porque es silencioso— marcar como protegido uno
+que querías apagar.
+
+```
+oxidegate-mcp --approve
+```
+
+Enseña el fichero **antes** de aprobarlo, porque aprobar a ciegas no es
+consentir. Y **la aprobación es del CONTENIDO, no de la ruta**, siguiendo el
+modelo de `direnv`: aprobar una ruta para siempre dejaría que el repositorio
+cambiara el fichero mañana —basta un `git pull`— y se aplicara sin que nadie
+se enterara. Verificado en vivo: aprobar lo aplica, editar el fichero lo
+devuelve a pendiente.
+
+La idea de tener configuración por proyecto era nuestra y anterior. Lo que
+aportó estudiar `pi` fue **el problema de seguridad que esa idea arrastra, ya
+resuelto** — su modelo `--approve` / `--no-approve`.
+
+#### La forma del resultado hace el trabajo de seguridad
+
+Tres decisiones que no son estilo:
+
+- Un `pending` **no trae `config`**. Un llamador que se salte la comprobación
+  de estado no tiene nada que aplicar.
+- El fichero de aprobaciones devuelve `{}` ante **cualquier** fallo: nada
+  aprobado, nunca todo aprobado.
+- **Asimetría deliberada**: en las aprobaciones se *filtran* las entradas
+  basura; en la lista de protegidos se *rechaza* la lista entera. Filtrar una
+  aprobación aprueba menos; filtrar una protección protege menos. La misma
+  operación, dirección de seguridad opuesta.
+
 ### Por qué el interruptor no vive en una variable de entorno
 
 Estuvo en `OXIDEGATE_MCP_DISABLE_BY_DEFAULT` y falló una prueba real: **el
@@ -501,7 +550,51 @@ Las dos variables siguen funcionando y **ganan** cuando están definidas, en
 
 ---
 
-## 10. La vía para levantar el techo
+## 10. El diagnóstico: `--doctor`
+
+Cada comprobación de este comando es un fallo que costó tiempo real encontrar
+y que **no era diagnosticable desde fuera**. Juntas son un comando de un
+segundo.
+
+```
+oxidegate-savings --doctor
+```
+
+```
+  ✔ El proxy responde
+  ✔ Lo que responde ES OxideGate
+  ✔ /health responde 200
+  ✔ 41 peticiones observadas
+  ! Las tools llegan APLANADAS (tools_flattened)
+  ✔ Precio disponible para 2 servidor(es)
+  ✔ Desconectar al arrancar: ACTIVADO
+  ✔ Sin configuración de proyecto
+
+  DEGRADED — Funciona, pero hay algo que limita lo que se puede reportar.
+```
+
+**La regla que lo gobierna:** una comprobación que no se pudo hacer sale como
+`?`, jamás como `✔`, y el veredicto no puede ser `OK` mientras quede alguna sin
+saber. Decir «todo bien» sobre algo que no se miró **cierra la investigación**
+que habría encontrado el problema.
+
+### Tres defectos que aparecieron ejecutándolo
+
+Ninguno era visible en los catorce tests unitarios del módulo:
+
+| Defecto | Por qué importaba |
+|---|---|
+| El doctor **moría antes de diagnosticar** | `getJson` lanza a propósito y el proceso sale: fallaba justo en los dos casos para los que existe |
+| **Se creía un 200 de un desconocido** | Con un WordPress en el puerto, decía «el proxy está vivo» dos líneas después de descartar que ese servicio fuera OxideGate |
+| El veredicto **enterraba lo accionable** | `unknown` pesaba más que `warn`, así que un proxy sano sin tráfico se resumía como «desconocido», escondiendo el único aviso arreglable detrás de un desconocido que era su propia consecuencia |
+
+El mock de tests sirve ahora `/health`, como el OxideGate real desde 0.3.0. Un
+fixture que no lo sirviera diagnosticaría un proxy sano como roto: **el fixture
+tiene que representar el sistema, no una versión anterior de él.**
+
+---
+
+## 11. La vía para levantar el techo
 
 El límite de la §4 —que el cable no conserva la atribución— resultó **no ser
 insalvable**. Y llegar ahí exigió desenterrar por qué ya se había intentado.
@@ -539,6 +632,30 @@ La tercera fila es justo el fallo que temían, y no puede ocurrir.
 **La razón de fondo por la que #5 no era resoluble tal como se planteó: le
 pedía a OxideGate una respuesta que no tiene datos para dar.** No tiene el
 snapshot. Cada instrumento sabe la mitad, y la solución exige a los dos.
+
+### El campo existe en OxideGate — pero todavía no en ningún release
+
+OxideGate aceptó la propuesta. El campo existe:
+
+| | |
+|---|---|
+| Commit | `6c9b98a`, PR #25, mergeado el 25/07 a las 17:17 |
+| Contrato | `pub tool_names: Vec<String>` en cada entrada de `tools_by_server` |
+| **Publicado** | **No.** El último tag sigue siendo `v0.3.1`, de las 08:53 |
+| El proxy en ejecución | `tool_names: AUSENTE` |
+
+Es **el mismo patrón que dejó el monitor vacío durante meses**: el código
+tiene el arreglo, el tag no lo alcanza, y quien lo usa sigue ejecutando lo
+anterior. Documentado en la §3 como lección, y repetido aquí como hecho.
+
+Un detalle del contrato que la lens tendrá que respetar cuando lo consuma:
+
+> *Acotada a `MAX_TOOL_NAMES` entradas. Si `tool_names.len() < tools`, la
+> lista está truncada y el conteo `tools` es el bueno.*
+
+Una lista truncada **no permite concluir «este servidor no se usó»**: sus
+herramientas pueden haber quedado fuera del corte. Atribuir sobre ella
+fabricaría exactamente el cero que este proyecto existe para no fabricar.
 
 ### Implementado
 
@@ -583,17 +700,31 @@ fila de la tabla de arriba, comprobada.
 
 ---
 
-## 11. Lo que queda abierto
+## 12. Lo que queda abierto
 
 | # | Asunto | Estado |
 |---|---|---|
-| [OxideGate#19](https://github.com/pichu2707/OxideGate/issues/19) | Exponer los nombres de tools aplanadas | Abierto — desbloquea el techo de la §4 |
-| [lens#5](https://github.com/pichu2707/oxidegate-lens/issues/5) | Consumirlos para atribuir | **Bloqueado** por #19 |
-| [lens#7](https://github.com/pichu2707/oxidegate-lens/issues/7) | Decidir si habrá plugin para `pi`, o decir que no | Abierto y decidible hoy |
+| [OxideGate#19](https://github.com/pichu2707/OxideGate/issues/19) | Publicar un release de OxideGate que lleve `tool_names` | **Lo único que bloquea de verdad.** El código está en `main` (`6c9b98a`); el último tag sigue siendo `v0.3.1` |
+| [lens#13](https://github.com/pichu2707/oxidegate-lens/issues/13) | Bajar la válvula a granularidad de tool | Anotado. Prioridad baja, y antes hay que comprobar si es accionable |
 | — | Hook `tool.execute.after` sin verificar contra OpenCode real | Necesita sesión viva |
 | — | El fetch-patch solo reescribe la URL **exacta** de Codex; los modelos no-Codex no pasan por el proxy | Producto |
 | — | Ese patch no se distribuye: está escrito a mano en la máquina del mantenedor | Producto |
 | — | Fase 5 en `mcp-savings`: `saveSnapshot` atómico y retirar `panel.ts` | Otro repositorio |
+
+**Cerrados en esta ronda:** [lens#6](https://github.com/pichu2707/oxidegate-lens/issues/6)
+(la matriz de harnesses), [lens#7](https://github.com/pichu2707/oxidegate-lens/issues/7)
+(`pi` no necesita válvula — resolvió el coste MCP por arquitectura, con un
+*gateway* de una sola tool y conexión bajo demanda),
+[lens#12](https://github.com/pichu2707/oxidegate-lens/issues/12) (configuración
+por proyecto con modelo de confianza) y
+[lens#5](https://github.com/pichu2707/oxidegate-lens/issues/5) — **el techo de
+la §4, levantado en código**.
+
+> **La lens está lista y el proxy no.** El cruce funciona, degrada
+> correctamente cuando el campo falta, y no hará nada visible hasta que
+> OxideGate publique una versión que lo lleve. Es el mismo patrón que dejó el
+> monitor vacío durante meses: el código tiene el arreglo, el tag no lo
+> alcanza, y quien lo usa sigue ejecutando lo anterior.
 
 Seguimiento en el [project «OxideGate + Lens»](https://github.com/users/pichu2707/projects/12).
 
@@ -601,7 +732,7 @@ Seguimiento en el [project «OxideGate + Lens»](https://github.com/users/pichu2
 ya no confunde *medible* con *utilizable* (párrafo con lo medido, no columna
 con conjeturas), y la fila de `pi.dev` pasó a «verificado».
 
-## 12. La pregunta de producto que sale de todo esto
+## 13. La pregunta de producto que sale de todo esto
 
 La válvula informada se diseñó para responder *"¿qué MCP puedo desconectar
 porque no lo uso?"*. Medido: **esa pregunta no se puede responder en los
