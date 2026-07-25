@@ -22,7 +22,8 @@
     "test": "node --test test/*.test.mjs"
   },
   "bin": {
-    "oxidegate-savings": "bin/oxidegate-savings.mjs"
+    "oxidegate-savings": "bin/oxidegate-savings.mjs",
+    "oxidegate-mcp": "bin/oxidegate-mcp.mjs"
   },
   "files": [
     "bin",
