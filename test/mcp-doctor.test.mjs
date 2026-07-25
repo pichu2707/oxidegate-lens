@@ -136,3 +136,32 @@ test('un 200 en /health de algo que NO es OxideGate no vale: es unknown, no ok',
   assert.equal(health.status, 'unknown', 'un 200 de un desconocido no dice nada sobre OxideGate');
   assert.notEqual(health.status, 'ok');
 });
+
+test('un config de proyecto SIN aprobar sale como aviso, con su hash y qué hacer', () => {
+  const result = diagnose({
+    ...sano,
+    projectConfig: { status: 'pending', path: '/repo/.oxidegate-lens.json', approvalHash: 'ab12cd34' },
+  });
+
+  const p = check(result, 'project');
+  assert.equal(p.status, 'warn');
+  assert.match(p.detail + p.action, /oxidegate-mcp --approve/, 'debe decir cómo aprobarlo');
+  assert.match(p.detail + p.action, /ab12cd34/, 'y qué contenido se aprobaría');
+  assert.match(p.detail + p.action, /clonad|ajeno|no se aplica/i, 'y por qué no se aplicó solo');
+});
+
+test('un config de proyecto aprobado se reporta como activo', () => {
+  const result = diagnose({
+    ...sano,
+    projectConfig: { status: 'approved', path: '/repo/.oxidegate-lens.json', config: {} },
+  });
+
+  assert.equal(check(result, 'project').status, 'ok');
+});
+
+test('sin config de proyecto, la comprobación no ensucia el veredicto', () => {
+  const result = diagnose({ ...sano, projectConfig: { status: 'none' } });
+
+  assert.equal(check(result, 'project').status, 'ok');
+  assert.equal(result.verdict, 'ok');
+});
