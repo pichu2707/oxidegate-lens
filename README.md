@@ -354,14 +354,54 @@ El reporte de ahorro de arriba es el camino principal y está verificado. Esta
 otra superficie existe, pero es secundaria — instalarla y su paso a paso están
 en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
 
-- **Plugin de OpenCode** (`opencode/oxidegate-lens.ts`): **experimental y no
-  probado** contra un OpenCode real. El hook usado (`tool.execute.after`) no fue
-  verificado. Además, por sí solo no enruta nada: sólo lee lo que OxideGate ya
-  midió. Para que el tráfico pase por OxideGate hace falta configurarlo aparte
-  — con un bloque `provider` en `opencode.json` (ver `examples/opencode.json`),
-  o parcheando `fetch` desde otro plugin. El bloque `provider` es una forma de
-  enrutar, no la única. Tratalo como punto de partida, no como integración
-  probada.
+- **Plugin de OpenCode** (`opencode/oxidegate-lens.ts`): por sí solo no enruta
+  nada — sólo lee lo que OxideGate ya midió. Para que el tráfico pase por
+  OxideGate hace falta configurarlo aparte: con un bloque `provider` en
+  `opencode.json` (ver `examples/opencode.json`), o parcheando `fetch` desde
+  otro plugin. El bloque `provider` es una forma de enrutar, no la única.
+
+  **Qué está verificado y qué no**, con esa distinción a propósito:
+
+  - **Verificado** contra un OpenCode 1.18.4 real: `client.mcp.status`,
+    `client.mcp.connect` y `client.mcp.disconnect`. Un detalle que sólo
+    aparece ejecutándolo: tras un `disconnect` el SDK devuelve el estado
+    **`"disabled"`**, no `"disconnected"`. El plugin sobrevive a eso porque
+    pasa el estado del SDK **verbatim** y nunca lo compara contra una cadena
+    fija. No introduzcas una.
+  - **No verificado** contra un OpenCode real: el hook `tool.execute.after` y
+    el sondeo sobre `session.idle`. Ambos se han ejercitado con un cliente
+    falso, que prueba que el cableado corre, no que OpenCode los dispare
+    cuando creemos.
+
+### Avisos de MCP y servidores protegidos
+
+Con `OXIDEGATE_MCP_DISABLE_BY_DEFAULT=1`, el plugin desconecta al arrancar los
+MCP que no hayas protegido, y **te lo dice**: cuántos quedan sin conectar y
+cuáles. Después avisa cuando alguno se conecta.
+
+Qué proteger se declara en `~/.config/oxidegate-lens/config.json`:
+
+```json
+{
+  "protectedMcpServers": ["engram", "context7"]
+}
+```
+
+`OXIDEGATE_MCP_ALLOWLIST` sigue funcionando y **gana** si está definida —
+incluso definida y vacía, que significa "esta vez no protejas nada". Así se
+puede ignorar el fichero desde la línea de comandos sin editarlo.
+
+Dos comportamientos que conviene conocer antes de que te sorprendan:
+
+- **Si el fichero de config no se puede leer, no se desconecta NADA**, y se
+  avisa con la razón. Aquí una lista vacía no es un dato, es una orden: un
+  lector que degradara un JSON roto a `[]` desconectaría exactamente los
+  servidores que ese fichero existía para proteger. Ante la duda, no se toca.
+- **El aviso de conexión llega en el siguiente momento de reposo, no al
+  instante.** OpenCode no emite ningún evento de MCP — su unión `Event` tiene
+  32 miembros y ninguno lo es — así que no hay nada a lo que suscribirse y la
+  única forma de enterarse es leer el estado dos veces y comparar. El sondeo
+  cuelga de `session.idle`.
 
 ---
 
