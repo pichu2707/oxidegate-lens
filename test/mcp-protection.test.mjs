@@ -130,3 +130,75 @@ test('a broken config file is irrelevant when the env var is set — the env ans
   assert.deepEqual(result.servers, ['engram']);
   assert.equal(result.source, 'env');
 });
+
+// =======================================================================
+// planMcpDisable — the decision the protection list exists to inform.
+//
+// The dangerous branch is `protection.status !== 'known'`. Everywhere else
+// an unknown degrades into a quieter report; here it would degrade into
+// DISCONNECTING SERVERS. Refusing to act is the only safe response to not
+// knowing what the user protected, and `targets` must be absent (not empty)
+// so a caller that ignores `action` still cannot iterate its way into harm.
+// =======================================================================
+
+test('planMcpDisable: unknown protection REFUSES, and offers no targets to iterate', async () => {
+  const { planMcpDisable } = await import('../lib/mcp-protection.mjs');
+
+  const plan = planMcpDisable({
+    servers: ['engram', 'context7'],
+    protection: { status: 'unknown', reason: 'malformed-json', source: 'file' },
+  });
+
+  assert.equal(plan.action, 'refuse');
+  assert.equal(plan.reason, 'protection-unknown');
+  assert.equal(plan.targets, undefined, 'a refusal must not hand anyone a list to disconnect');
+  assert.equal(plan.protectionReason, 'malformed-json', 'the caller must be able to tell the user WHY it refused');
+});
+
+test('planMcpDisable: known protection disables everything not on the list', async () => {
+  const { planMcpDisable } = await import('../lib/mcp-protection.mjs');
+
+  const plan = planMcpDisable({
+    servers: ['engram', 'context7', 'otro'],
+    protection: { status: 'known', servers: ['engram'], source: 'file' },
+  });
+
+  assert.equal(plan.action, 'disable');
+  assert.deepEqual(plan.targets, ['context7', 'otro']);
+  assert.deepEqual(plan.preserved, ['engram']);
+});
+
+test('planMcpDisable: a protected name that matches no live server is reported, never silently ignored', async () => {
+  const { planMcpDisable } = await import('../lib/mcp-protection.mjs');
+
+  const plan = planMcpDisable({
+    servers: ['engram'],
+    protection: { status: 'known', servers: ['engram', 'typo-server'], source: 'file' },
+  });
+
+  // A typo in the config is indistinguishable from a server that is simply
+  // off right now — and the user believes they protected something. Saying
+  // so is the difference between a config that works and one that looks
+  // like it does.
+  assert.deepEqual(plan.unmatchedProtections, ['typo-server']);
+});
+
+test('planMcpDisable: nothing to disable is its own outcome, not an empty disable', async () => {
+  const { planMcpDisable } = await import('../lib/mcp-protection.mjs');
+
+  const plan = planMcpDisable({
+    servers: ['engram'],
+    protection: { status: 'known', servers: ['engram'], source: 'file' },
+  });
+
+  assert.equal(plan.action, 'nothing-to-do');
+  assert.deepEqual(plan.preserved, ['engram']);
+});
+
+test('planMcpDisable: no servers at all is nothing-to-do, never a refusal', async () => {
+  const { planMcpDisable } = await import('../lib/mcp-protection.mjs');
+
+  const plan = planMcpDisable({ servers: [], protection: { status: 'known', servers: [], source: 'default' } });
+
+  assert.equal(plan.action, 'nothing-to-do');
+});
