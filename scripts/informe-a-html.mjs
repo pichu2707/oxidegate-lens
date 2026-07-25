@@ -85,6 +85,103 @@ const SVGS = [
     <text x="400" y="145" fill="#64748b" font-size="10">legible</text>
     <text x="330" y="245" fill="#dc2626" font-size="10">ilegible</text>
   </svg>`,
+  // 4. Precedencia y puerta de aprobación
+  `<svg viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="12">
+    <defs><marker id="d" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#64748b"/></marker>
+    <marker id="dr" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#dc2626"/></marker></defs>
+    <rect x="20" y="18" width="190" height="40" rx="6" fill="#eef2ff" stroke="#6366f1"/>
+    <text x="115" y="42" text-anchor="middle" fill="#312e81">¿Hay variable de entorno?</text>
+    <rect x="330" y="18" width="150" height="40" rx="6" fill="#ecfdf5" stroke="#10b981"/>
+    <text x="405" y="42" text-anchor="middle" fill="#065f46">Gana la variable</text>
+    <rect x="20" y="95" width="190" height="40" rx="6" fill="#eef2ff" stroke="#6366f1"/>
+    <text x="115" y="113" text-anchor="middle" fill="#312e81" font-size="11">¿Hay</text>
+    <text x="115" y="127" text-anchor="middle" fill="#312e81" font-size="11">.oxidegate-lens.json?</text>
+    <path d="M300,200 L420,165 L540,200 L420,235 z" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+    <text x="420" y="196" text-anchor="middle" fill="#78350f" font-size="11">¿El HASH de su</text>
+    <text x="420" y="210" text-anchor="middle" fill="#78350f" font-size="11">contenido está aprobado?</text>
+    <rect x="620" y="128" width="250" height="52" rx="6" fill="#fef2f2" stroke="#dc2626" stroke-width="2"/>
+    <text x="745" y="149" text-anchor="middle" fill="#7f1d1d" font-weight="600">PENDIENTE — no se aplica</text>
+    <text x="745" y="166" text-anchor="middle" fill="#b91c1c" font-size="10">y se avisa con el hash</text>
+    <rect x="620" y="222" width="250" height="52" rx="6" fill="#ecfdf5" stroke="#10b981" stroke-width="2"/>
+    <text x="745" y="243" text-anchor="middle" fill="#065f46" font-weight="600">Gana el proyecto</text>
+    <text x="745" y="260" text-anchor="middle" fill="#047857" font-size="10">REEMPLAZANDO lo global</text>
+    <rect x="150" y="285" width="220" height="36" rx="6" fill="#f8fafc" stroke="#94a3b8"/>
+    <text x="260" y="308" text-anchor="middle" fill="#334155">Gana la config global</text>
+    <line x1="212" y1="38" x2="326" y2="38" stroke="#64748b" marker-end="url(#d)"/>
+    <text x="255" y="30" fill="#64748b" font-size="10">sí</text>
+    <line x1="115" y1="60" x2="115" y2="91" stroke="#64748b" marker-end="url(#d)"/>
+    <text x="122" y="80" fill="#64748b" font-size="10">no</text>
+    <path d="M115,137 C115,300 130,303 146,303" stroke="#64748b" fill="none" marker-end="url(#d)"/>
+    <text x="122" y="220" fill="#64748b" font-size="10">no hay</text>
+    <line x1="212" y1="120" x2="330" y2="180" stroke="#64748b" marker-end="url(#d)"/>
+    <text x="250" y="140" fill="#64748b" font-size="10">sí hay</text>
+    <line x1="480" y1="182" x2="616" y2="154" stroke="#dc2626" marker-end="url(#dr)"/>
+    <text x="520" y="160" fill="#dc2626" font-size="10">no aprobado</text>
+    <line x1="480" y1="218" x2="616" y2="246" stroke="#64748b" marker-end="url(#d)"/>
+    <text x="520" y="245" fill="#64748b" font-size="10">aprobado</text>
+    <path d="M700,182 C560,182 400,270 374,300" stroke="#94a3b8" fill="none" stroke-dasharray="4" marker-end="url(#d)"/>
+    <text x="530" y="292" fill="#94a3b8" font-size="10">cae a lo global</text>
+  </svg>`,
+  // 5. El cruce de los dos instrumentos
+  `<svg viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="12">
+    <defs><marker id="e" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#64748b"/></marker></defs>
+    <rect x="15" y="30" width="185" height="58" rx="7" fill="#f8fafc" stroke="#94a3b8"/>
+    <text x="107" y="52" text-anchor="middle" fill="#334155" font-size="11">Cable aplanado</text>
+    <text x="107" y="70" text-anchor="middle" fill="#64748b" font-size="10">(native): 40 tools</text>
+    <rect x="15" y="180" width="185" height="72" rx="7" fill="#fffbeb" stroke="#f59e0b"/>
+    <text x="107" y="202" text-anchor="middle" fill="#78350f" font-size="11">snapshot mcp-savings</text>
+    <text x="107" y="220" text-anchor="middle" fill="#b45309" font-size="9">engram: mem_search, mem_save…</text>
+    <text x="107" y="235" text-anchor="middle" fill="#b45309" font-size="9">context7: query-docs…</text>
+    <rect x="250" y="30" width="180" height="58" rx="7" fill="#ecfdf5" stroke="#10b981"/>
+    <text x="340" y="50" text-anchor="middle" fill="#065f46" font-size="11">OxideGate publica</text>
+    <text x="340" y="66" text-anchor="middle" fill="#047857" font-size="10">los NOMBRES</text>
+    <text x="340" y="80" text-anchor="middle" fill="#047857" font-size="9">sin deducir nada</text>
+    <rect x="480" y="110" width="180" height="62" rx="7" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="570" y="133" text-anchor="middle" fill="#4c1d95" font-weight="600">oxidegate-lens</text>
+    <text x="570" y="151" text-anchor="middle" fill="#6d28d9" font-size="10">CRUZA nombre</text>
+    <text x="570" y="164" text-anchor="middle" fill="#6d28d9" font-size="10">contra lista declarada</text>
+    <rect x="710" y="30" width="180" height="34" rx="5" fill="#ecfdf5" stroke="#10b981"/>
+    <text x="800" y="52" text-anchor="middle" fill="#065f46" font-size="11">mem_search → engram</text>
+    <rect x="710" y="120" width="180" height="34" rx="5" fill="#ecfdf5" stroke="#10b981"/>
+    <text x="800" y="142" text-anchor="middle" fill="#065f46" font-size="11">query-docs → context7</text>
+    <rect x="710" y="205" width="180" height="48" rx="5" fill="#f8fafc" stroke="#94a3b8"/>
+    <text x="800" y="225" text-anchor="middle" fill="#334155" font-size="11">delegation_list → nadie</text>
+    <text x="800" y="241" text-anchor="middle" fill="#64748b" font-size="10">sigue siendo nativa</text>
+    <line x1="202" y1="59" x2="246" y2="59" stroke="#64748b" marker-end="url(#e)"/>
+    <line x1="432" y1="70" x2="476" y2="120" stroke="#64748b" marker-end="url(#e)"/>
+    <line x1="202" y1="212" x2="476" y2="158" stroke="#64748b" marker-end="url(#e)"/>
+    <line x1="662" y1="130" x2="706" y2="55" stroke="#64748b" marker-end="url(#e)"/>
+    <line x1="662" y1="141" x2="706" y2="138" stroke="#64748b" marker-end="url(#e)"/>
+    <line x1="662" y1="155" x2="706" y2="222" stroke="#64748b" marker-end="url(#e)"/>
+  </svg>`,
+  // 6. Estado de la cadena
+  `<svg viewBox="0 0 900 240" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="12">
+    <defs><marker id="f" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#10b981"/></marker>
+    <marker id="fr" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#dc2626"/></marker></defs>
+    <rect x="15" y="25" width="165" height="48" rx="6" fill="#fffbeb" stroke="#f59e0b"/>
+    <text x="97" y="45" text-anchor="middle" fill="#78350f" font-size="11">mcp-savings</text>
+    <text x="97" y="61" text-anchor="middle" fill="#b45309" font-size="10">mide el precio</text>
+    <rect x="15" y="140" width="165" height="48" rx="6" fill="#fef2f2" stroke="#dc2626" stroke-width="2"/>
+    <text x="97" y="160" text-anchor="middle" fill="#7f1d1d" font-size="11">OxideGate main</text>
+    <text x="97" y="176" text-anchor="middle" fill="#b91c1c" font-size="10">tiene tool_names</text>
+    <rect x="250" y="140" width="175" height="48" rx="6" fill="#f8fafc" stroke="#94a3b8"/>
+    <text x="337" y="160" text-anchor="middle" fill="#334155" font-size="11">OxideGate 0.3.1</text>
+    <text x="337" y="176" text-anchor="middle" fill="#64748b" font-size="10">instalado</text>
+    <rect x="490" y="80" width="175" height="52" rx="6" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="577" y="102" text-anchor="middle" fill="#4c1d95" font-weight="600">oxidegate-lens</text>
+    <text x="577" y="120" text-anchor="middle" fill="#6d28d9" font-size="10">cruce implementado</text>
+    <rect x="720" y="80" width="165" height="52" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-dasharray="4"/>
+    <text x="802" y="100" text-anchor="middle" fill="#334155" font-size="10">atribución por servidor</text>
+    <text x="802" y="115" text-anchor="middle" fill="#64748b" font-size="10">en rutas aplanadas</text>
+    <line x1="182" y1="55" x2="486" y2="95" stroke="#10b981" marker-end="url(#f)"/>
+    <text x="300" y="65" fill="#059669" font-size="10">✔ funciona</text>
+    <line x1="182" y1="164" x2="246" y2="164" stroke="#dc2626" stroke-dasharray="5" marker-end="url(#fr)"/>
+    <text x="150" y="215" fill="#dc2626" font-size="11" font-weight="600">✖ sin publicar: el tag no alcanza al código</text>
+    <line x1="427" y1="158" x2="486" y2="128" stroke="#94a3b8" marker-end="url(#f)"/>
+    <text x="400" y="120" fill="#64748b" font-size="10">sin tool_names</text>
+    <line x1="667" y1="106" x2="716" y2="106" stroke="#94a3b8" stroke-dasharray="4" marker-end="url(#f)"/>
+    <text x="640" y="150" fill="#64748b" font-size="10">esperando el release</text>
+  </svg>`,
 ];
 
 /**
@@ -206,7 +303,11 @@ th { background:#f1f5f9; text-align:left; padding:6px 8px; border:1px solid #cbd
 td { padding:6px 8px; border:1px solid #e2e8f0; vertical-align:top; }
 tr:nth-child(even) td { background:#fafafa; }
 code { background:#f1f5f9; padding:1px 4px; border-radius:3px; font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:9pt; }
-pre { background:#0f172a; color:#e2e8f0; padding:11px 13px; border-radius:6px; overflow-x:auto; page-break-inside:avoid; }
+/* En pantalla un bloque largo puede desplazarse; en PAPEL no. Una barra de
+   scroll en un PDF no es una barra: es texto perdido, y se vio recortado en
+   la primera revisión. Se envuelve en vez de cortar. */
+pre { background:#0f172a; color:#e2e8f0; padding:11px 13px; border-radius:6px; page-break-inside:avoid;
+      white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; }
 pre code { background:none; color:inherit; font-size:8.5pt; line-height:1.45; }
 blockquote { border-left:4px solid #8b5cf6; background:#faf5ff; margin:12px 0; padding:9px 14px; color:#4c1d95; page-break-inside:avoid; }
 figure { margin:16px 0; text-align:center; page-break-inside:avoid; }
