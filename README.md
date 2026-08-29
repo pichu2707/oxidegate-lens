@@ -18,6 +18,35 @@ brew install pichu2707/tap/oxidegate-lens
 Instala un comando: **`oxidegate-savings`** (el reporte). Cero dependencias:
 solo necesita Node.
 
+### Si usas OpenCode, instálalo por npm
+
+Homebrew sirve los binarios de línea de comandos, pero **no instala
+`node_modules`** — y el plugin de OpenCode necesita `@opencode-ai/plugin` en
+tiempo de ejecución para exponer sus tools. Instalado por brew, el plugin
+arranca pero sus tres tools manuales de la válvula no existen, y te lo dice:
+
+```
+[oxidegate-lens] manual MCP valve tools unavailable: @opencode-ai/plugin could not be loaded
+```
+
+Por npm sí llega completo:
+
+```sh
+npm install oxidegate-lens
+```
+
+Y en el `opencode.json` de tu proyecto:
+
+```json
+{
+  "plugin": ["./node_modules/oxidegate-lens/opencode/oxidegate-lens.ts"]
+}
+```
+
+> **`plugin[]` lleva una RUTA, no un nombre de paquete.** Medido contra
+> OpenCode 1.18.16: con la ruta el plugin carga; con `"oxidegate-lens"` a secas
+> no carga y no se queja — el silencio es indistinguible de que funcione.
+
 Y necesita a [OxideGate](https://github.com/pichu2707/OxideGate) corriendo, que es
 quien mide:
 
