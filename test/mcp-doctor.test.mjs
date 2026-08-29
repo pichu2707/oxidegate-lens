@@ -32,6 +32,10 @@ const sano = {
   snapshot: { status: 'known', freshness: 'fresh', servers: [{ name: 'engram' }] },
   protection: { status: 'known', servers: ['engram'], source: 'file' },
   switchResult: { status: 'known', enabled: true, source: 'file' },
+  // El binario SIEMPRE recoge esta observación, así que un estado sano la
+  // trae. Omitirla dejaría la comprobación en `unknown` —correcto por la
+  // regla del módulo— y ningún estado "sano" podría llegar a veredicto ok.
+  opencodeCache: { status: 'match', cached: '0.6.1', running: '0.6.1' },
 };
 
 const check = (result, id) => result.checks.find((c) => c.id === id);
@@ -164,4 +168,47 @@ test('sin config de proyecto, la comprobación no ensucia el veredicto', () => {
 
   assert.equal(check(result, 'project').status, 'ok');
   assert.equal(result.verdict, 'ok');
+});
+
+// =======================================================================
+// LA CACHÉ DE PLUGINS DE OPENCODE
+//
+// Se publicó 0.6.1 con el arreglo, y el instalador de OpenCode seguía
+// fallando igual que con 0.6.0 — porque leía una copia cacheada de la
+// 0.6.0 en un directorio llamado `@latest`. El síntoma describía con
+// precisión un paquete que ya no era el publicado.
+//
+// Un eslabón que puede quedarse viejo en silencio es exactamente lo que
+// este diagnóstico existe para nombrar.
+// =======================================================================
+
+test('caché de OpenCode con OTRA versión -> aviso, y nombra las dos', () => {
+  const result = diagnose({ ...sano, opencodeCache: { status: 'mismatch', cached: '0.6.0', running: '0.6.1' } });
+  const c = check(result, 'opencode-cache');
+
+  assert.equal(c.status, 'warn');
+  assert.match(c.detail, /0\.6\.0/, 'la que está cacheada');
+  assert.match(c.detail, /0\.6\.1/, 'y la que ejecutas');
+  assert.ok(c.action, 'un síntoma sin siguiente paso solo reubica la confusión');
+});
+
+test('caché al día -> ok', () => {
+  const result = diagnose({ ...sano, opencodeCache: { status: 'match', cached: '0.6.1', running: '0.6.1' } });
+
+  assert.equal(check(result, 'opencode-cache').status, 'ok');
+});
+
+test('sin caché -> ok, y NO manda borrar un directorio que no existe', () => {
+  const result = diagnose({ ...sano, opencodeCache: { status: 'absent' } });
+  const c = check(result, 'opencode-cache');
+
+  assert.equal(c.status, 'ok');
+  assert.doesNotMatch(`${c.detail}${c.action}`, /\brm\b|borra/i, 'nada que borrar');
+});
+
+test('caché ilegible -> unknown, nunca ok', () => {
+  const result = diagnose({ ...sano, opencodeCache: { status: 'unknown' } });
+
+  assert.equal(check(result, 'opencode-cache').status, 'unknown');
+  assert.notEqual(result.verdict, 'ok', 'un unknown impide declarar que todo está bien');
 });
