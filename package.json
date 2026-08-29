@@ -7,14 +7,6 @@
   "engines": {
     "node": ">=24"
   },
-  "peerDependencies": {
-    "@opencode-ai/plugin": "^1.18.2"
-  },
-  "peerDependenciesMeta": {
-    "@opencode-ai/plugin": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.18.2"
   },
@@ -31,5 +23,31 @@
     "opencode",
     "examples",
     "README.md"
+  ],
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.18.2"
+  },
+  "exports": {
+    ".": "./opencode/oxidegate-lens.ts",
+    "./package.json": "./package.json",
+    "./*": "./*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pichu2707/oxidegate-lens.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pichu2707/oxidegate-lens/issues"
+  },
+  "homepage": "https://github.com/pichu2707/oxidegate-lens#readme",
+  "keywords": [
+    "mcp",
+    "opencode",
+    "oxidegate",
+    "tokens",
+    "context",
+    "observability",
+    "llm",
+    "proxy"
   ]
 }
