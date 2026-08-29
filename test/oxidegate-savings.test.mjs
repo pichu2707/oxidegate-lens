@@ -816,6 +816,25 @@ test('pi/Codex: imprime dashboard factual desde /requests sin atribución MCP ni
   assertNoDeadCausalArtifacts(assert, stdout);
 });
 
+test('"no ha visto peticiones" nombra a QUIÉN le preguntó', async () => {
+  // Esta frase describía dos situaciones incompatibles: el proxy correcto
+  // sin tráfico, y un okupa en el puerto contestando cualquier cosa. La
+  // primera es normal; la segunda tuvo la herramienta rota durante meses.
+  // Ahora que la lente busca el proxy sola, el usuario necesita ver DÓNDE
+  // acabó preguntando para saber cuál de las dos tiene delante.
+  const mock = await startMockOxideGate({ requests: [], stats: [] });
+
+  try {
+    const { stderr, code } = await runSavingsCli({ baseUrl: mock.url });
+
+    assert.equal(code, 1);
+    assert.match(stderr, /no ha visto|not seen/i);
+    assert.ok(stderr.includes(mock.url), `debe nombrar el endpoint consultado; stderr fue: ${stderr}`);
+  } finally {
+    await mock.close();
+  }
+});
+
 test('puerto ocupado por otro servicio -> "no es OxideGate", no un error de parseo JSON', async () => {
   // El 8080 es un puerto disputadísimo. Un usuario con cualquier otro servicio
   // web ahí recibía "Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON":
