@@ -19,6 +19,17 @@
 // decide qué pasará la próxima vez que arranques.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+
+// La versión que se enseña en la portada. Se lee del package.json del propio
+// paquete y no de una constante a mano: un número duplicado en el código es
+// uno que alguien olvidará subir en la siguiente release.
+const LENS_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+  } catch {
+    return undefined;
+  }
+})();
 import { dirname } from 'node:path';
 import { readMcpSavingsSnapshot } from '../lib/mcp-snapshot.mjs';
 import {
@@ -158,7 +169,7 @@ function printOnce(state) {
   // El pie —dónde se guarda y QUIÉN lo aplica— lo compone renderEditor, que
   // está en lib/ y sí tiene tests. Construirlo aquí fue el error original:
   // vivía sólo en esta función, así que el modo interactivo nunca lo enseñaba.
-  process.stdout.write(`\n${renderEditor(state, { configPath: resolveProtectionConfigPath() })}\n\n`);
+  process.stdout.write(`\n${renderEditor(state, { configPath: resolveProtectionConfigPath(), version: LENS_VERSION })}\n\n`);
   if (state.status === 'ready') {
     process.stdout.write('  Para cambiarla: oxidegate-mcp (en un terminal interactivo)\n\n');
   }
@@ -170,7 +181,7 @@ function runInteractive(initial) {
 
   const draw = () => {
     stdout.write('\x1b[2J\x1b[H');
-    stdout.write(`\n${renderEditor(state, { configPath: resolveProtectionConfigPath() })}\n\n`);
+    stdout.write(`\n${renderEditor(state, { configPath: resolveProtectionConfigPath(), version: LENS_VERSION })}\n\n`);
     stdout.write('  ↑↓ mover · espacio preservar/desconectar · d interruptor · enter guardar · q salir\n');
   };
 
