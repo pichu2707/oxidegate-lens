@@ -322,9 +322,14 @@ test('el binario no vuelve a construir el pie por su cuenta', async () => {
 // LEGIBILIDAD DEL SELECTOR (issue #25)
 //
 // Un usuario real quería apagar context7 y acabó con la válvula entera
-// apagada y los dos servidores arrancando conectados. No fue torpeza: el
-// selector no dice en ninguna parte qué teclas existen, así que se
-// descubren pulsando — y una de ellas apaga la función entera.
+// apagada y los dos servidores arrancando conectados.
+//
+// CORRECCIÓN de la premisa original: el issue decía que no había leyenda de
+// teclas en ninguna parte, y era FALSO — vivía en `bin/oxidegate-mcp.mjs`
+// desde el primer commit del selector. Se buscó solo en lib/ y se concluyó
+// sobre todo el repo. Lo que sí fallaba es que decía `d interruptor`, sin
+// nombrar qué apaga: se pulsa sin saber que desactiva la función entera. Y
+// vivía fuera de los tests, así que nada garantizaba que se pintase.
 //
 // Y la fila seguía afirmando "se desconecta al arrancar" con el
 // interruptor apagado. El pie lo desmentía tres líneas más abajo, pero la
