@@ -29,23 +29,29 @@ arranca pero sus tres tools manuales de la válvula no existen, y te lo dice:
 [oxidegate-lens] manual MCP valve tools unavailable: @opencode-ai/plugin could not be loaded
 ```
 
-Por npm sí llega completo:
+Por npm sí llega completo, y en un solo comando — sin tocar ningún JSON:
+
+```sh
+opencode plugin oxidegate-lens
+```
+
+`opencode plugin` es el instalador del propio OpenCode: descarga el paquete y
+**actualiza tu configuración él mismo**. OpenCode instala los plugins de npm en
+su propia caché (`~/.cache/opencode/node_modules/`), no en el `node_modules`
+de tu proyecto.
+
+Si prefieres hacerlo a mano, o quieres fijar la versión, también vale instalar
+el paquete y apuntar a la ruta:
 
 ```sh
 npm install oxidegate-lens
 ```
-
-Y en el `opencode.json` de tu proyecto:
 
 ```json
 {
   "plugin": ["./node_modules/oxidegate-lens/opencode/oxidegate-lens.ts"]
 }
 ```
-
-> **`plugin[]` lleva una RUTA, no un nombre de paquete.** Medido contra
-> OpenCode 1.18.16: con la ruta el plugin carga; con `"oxidegate-lens"` a secas
-> no carga y no se queja — el silencio es indistinguible de que funcione.
 
 Y necesita a [OxideGate](https://github.com/pichu2707/OxideGate) corriendo, que es
 quien mide:
