@@ -374,3 +374,57 @@ test('con la válvula apagada no se anuncia ningún ahorro, porque no lo hay', (
 
   assert.doesNotMatch(out, /ahorras \d/i, 'prometer un ahorro que no va a ocurrir es peor que no decir nada');
 });
+
+// =======================================================================
+// LA PORTADA
+//
+// El selector es lo primero que abre alguien que quiere configurar esto, y
+// no decía ni cómo se llama ni quién lo hizo. Una herramienta sin nombre
+// en su propia pantalla de configuración parece un script prestado.
+// =======================================================================
+
+test('la portada dice el nombre del producto y quién lo firma', () => {
+  const out = renderEditor(baseState());
+
+  assert.match(out, /OXIDEGATE|OxideGate/i, 'el nombre');
+  assert.match(out, /JaviLazaro/, 'y la firma');
+});
+
+test('la portada enseña la versión cuando se le da', () => {
+  const out = renderEditor(baseState(), { version: '0.7.0' });
+
+  assert.match(out, /0\.7\.0/);
+});
+
+test('sin versión no imprime un hueco ni un undefined', () => {
+  // Misma disciplina que con configPath: una etiqueta con la nada detrás es
+  // peor que no poner la etiqueta.
+  const out = renderEditor(baseState());
+
+  assert.doesNotMatch(out, /undefined/, 'jamás un undefined en pantalla');
+  assert.doesNotMatch(out, /\bv\s*$/m, 'ni una v suelta esperando un número');
+});
+
+test('la portada también sale cuando no hay inventario que mostrar', () => {
+  // Es justo cuando más falta hace saber qué herramienta te está hablando:
+  // la pantalla de error es la que más gente ve sin contexto.
+  const out = renderEditor({ status: 'no-inventory', reason: 'missing-file' });
+
+  assert.match(out, /OXIDEGATE|OxideGate/i);
+});
+
+test('la caja de la portada CUADRA: todos sus bordes en la misma columna', () => {
+  // Se comprueba en vez de mirarla: un ancho calculado a mano se descuadra
+  // en cuanto alguien cambia el título, la versión o la firma, y nadie se
+  // entera hasta que sale feo en la pantalla de otro. La primera versión de
+  // esta portada ya salió torcida por contar mal seis caracteres.
+  for (const version of [undefined, '0.7.0', '1.10.12']) {
+    const lineas = renderEditor(baseState(), { version })
+      .split('\n')
+      .filter((l) => /[╭│╰]/.test(l));
+
+    assert.ok(lineas.length >= 4, 'la portada tiene sus cuatro líneas');
+    const anchos = new Set(lineas.map((l) => [...l].length));
+    assert.equal(anchos.size, 1, `con version=${version} los bordes no cuadran: ${[...anchos].join(', ')}`);
+  }
+});
