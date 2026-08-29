@@ -7,9 +7,6 @@
   "engines": {
     "node": ">=24"
   },
-  "devDependencies": {
-    "@opencode-ai/plugin": "^1.18.2"
-  },
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
