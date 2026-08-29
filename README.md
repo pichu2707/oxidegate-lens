@@ -35,16 +35,23 @@ Un solo camino, cuatro pasos:
 | ----- | ------------------------------------------ | ------------------------------------------------------ |
 | **1** | Enciende OxideGate                         | `OXIDEGATE_PORT=8899 oxidegate`                        |
 | **2** | Apunta tu agente al proxy                  | `export ANTHROPIC_BASE_URL=http://127.0.0.1:8899`      |
-| **3** | Úsalo un rato, y luego pide el reporte     | `OXIDEGATE_PORT=8899 oxidegate-savings`                |
+| **3** | Úsalo un rato, y luego pide el reporte     | `oxidegate-savings`                                    |
 | **4** | Lee la tabla                               | ↓ es exactamente lo que vas a ver                      |
 
 > **`ANTHROPIC_BASE_URL` va SIN `/v1`.** El cliente añade la ruta él mismo. Si le
 > pones el `/v1`, la petición sale a `/v1/v1/messages` y el proxy responde **404**.
 
-> **No uses el puerto por defecto (8080)**: lo suelen tener ocupado Apache, Tomcat
-> y compañía. Fija otro con `OXIDEGATE_PORT` — aquí usamos 8899 — y usa **ese
-> mismo número** en todos los pasos. Si apuntas a un puerto donde vive otro
-> servicio, el reporte te lo dice: *«responde, pero no es OxideGate»*.
+> **Al reporte no hace falta decirle el puerto.** `oxidegate-savings` busca el
+> proxy solo: mira `OXIDEGATE_LENS_URL`, luego `OXIDEGATE_PORT`, luego lo que el
+> propio OxideGate declara en `~/.config/oxidegate/proxy.log`, y por último los
+> puertos habituales. En todos los casos **comprueba que quien contesta es
+> OxideGate de verdad antes de creerle** — que algo responda en un puerto no lo
+> convierte en el proxy.
+>
+> **A OxideGate sí tienes que decírselo** (paso 1), y conviene: el 8080 lo suelen
+> ocupar Apache, Tomcat o Jenkins. Si dejas un `OXIDEGATE_PORT` viejo apuntando a
+> otro servicio, la lente sigue buscando y te avisa de que lo ha ignorado, en vez
+> de escribirte un reporte a partir de las respuestas de un desconocido.
 
 > **El paso 3 no es opcional.** OxideGate solo puede medir lo que ha visto pasar.
 > Si pides el reporte sin haber hecho ninguna petición a través del proxy, la

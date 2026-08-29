@@ -47,9 +47,16 @@
 // the reader how to check for themselves (repeat the request without the
 // proxy) instead of deciding it for them.
 //
-// Reads (env):
-//   OXIDEGATE_LENS_URL  - full base URL of the OxideGate proxy. Takes precedence.
-//   OXIDEGATE_PORT      - used to build "http://127.0.0.1:<port>". Defaults to 8080.
+// Reads (env) — all OPTIONAL. With none of them set, the endpoint is
+// discovered: see `lib/mcp-endpoint.mjs`, which owns the ordering and the
+// rule that nothing is accepted without proving it is OxideGate.
+//   OXIDEGATE_LENS_URL  - full base URL. A PIN: nothing else is probed.
+//   OXIDEGATE_PORT      - builds "http://127.0.0.1:<port>". A HINT: if the
+//                         proxy is not there, discovery continues and says so.
+//
+// Reads (disk):
+//   ~/.config/oxidegate/proxy.log - OxideGate's own "Escuchando en <url>"
+//                                   line. Tolerant: absent means keep looking.
 //
 // Reads (HTTP):
 //   GET /requests  - the newest entry carrying a `tools_by_server` breakdown.
@@ -119,6 +126,7 @@ import { buildValveRows } from '../lib/mcp-valve.mjs';
 import { readProtectedServers, readDisableByDefault } from '../lib/mcp-protection.mjs';
 import { diagnose } from '../lib/mcp-doctor.mjs';
 import { readProjectConfig, readApprovals } from '../lib/mcp-project-config.mjs';
+import { buildEndpointCandidates, chooseEndpoint, readProxyLogUrl } from '../lib/mcp-endpoint.mjs';
 
 const DEFAULT_PORT = 8080;
 
@@ -127,11 +135,63 @@ const DEFAULT_PORT = 8080;
 // because we gave up after 300ms is not.
 const FETCH_TIMEOUT_MS = 2000;
 
-function resolveBaseUrl() {
-  if (process.env.OXIDEGATE_LENS_URL) return process.env.OXIDEGATE_LENS_URL;
-  const port = process.env.OXIDEGATE_PORT ?? DEFAULT_PORT;
-  return `http://127.0.0.1:${port}`;
+/**
+ * Encuentra el proxy sin preguntarle el puerto al usuario.
+ *
+ * Aquí solo se RECOGE: se lee el log de OxideGate y se sondea la red.
+ * Quién gana lo decide `lib/mcp-endpoint.mjs`, que no toca ni disco ni red.
+ *
+ * El sondeo reutiliza `probeRequests`, que es el mismo que usa `--doctor`:
+ * la comprobación de identidad que ya existía deja de estar solo detrás de
+ * un flag y pasa al camino normal. Ese era el fallo — el diagnóstico
+ * correcto estaba escrito y no se ejecutaba salvo que ya sospecharas.
+ */
+async function discoverEndpoint() {
+  const candidates = buildEndpointCandidates({
+    env: process.env,
+    loggedUrl: readProxyLogUrl({}),
+  });
+
+  const found = await chooseEndpoint({
+    candidates,
+    verify: async (baseUrl) => {
+      const { reachable, rows } = await probeRequests(baseUrl);
+      return { reachable, isOxidegate: Array.isArray(rows) };
+    },
+  });
+
+  // Si no se encontró nada, se sigue adelante con el candidato MÁS
+  // EXPLÍCITO, no con el primero que se nos ocurra: los mensajes de error
+  // (y el doctor) tienen que hablar del sitio que el usuario tenía en la
+  // cabeza. Decirle «no responde el 8899» a quien fijó el 8080 le manda a
+  // investigar una máquina que no es la suya.
+  const baseUrl = found.status === 'found' ? found.baseUrl : (candidates[0]?.baseUrl ?? `http://127.0.0.1:${DEFAULT_PORT}`);
+  return { ...found, baseUrl };
 }
+
+/**
+ * El aviso de que se ignoró una orden explícita.
+ *
+ * Va a stderr a propósito: el stdout de esta herramienta es un reporte que
+ * la gente pipea, y meterle una nota administrativa por el medio lo
+ * ensucia. Pero callárselo tampoco vale — quien tenga un OXIDEGATE_PORT
+ * viejo en su perfil merece enterarse, o mañana vuelve a tropezar.
+ */
+function announceOverride(found) {
+  if (!found.overrode) return;
+  process.stderr.write(
+    `oxidegate-lens: ${found.overrode.baseUrl} responde, pero no es OxideGate — ` +
+      `se ignora ${found.overrode.source === 'env-port' ? 'OXIDEGATE_PORT' : 'la URL configurada'}.\n` +
+      `  Usando ${found.baseUrl}, que es donde ${SOURCE_LABEL[found.source] ?? 'se encontró el proxy'}.\n`,
+  );
+}
+
+const SOURCE_LABEL = {
+  'proxy-log': 'el propio proxy dice estar escuchando',
+  'known-port': 'estaba escuchando',
+  'env-port': 'apunta OXIDEGATE_PORT',
+  'env-url': 'apunta OXIDEGATE_LENS_URL',
+};
 
 // Decimal (base 1000), mirroring OxideGate's own `format_bytes`.
 //
@@ -594,8 +654,20 @@ USO:
     oxidegate-savings --help     Muestra esta ayuda
 
 DÓNDE MIRA:
-    OXIDEGATE_LENS_URL, o si no OXIDEGATE_PORT, o si no el 8080.
-    El 8080 lo suelen ocupar Apache, Tomcat o Jenkins: fija OXIDEGATE_PORT.
+    Lo busca solo. No hace falta configurar nada.
+
+    Por orden: OXIDEGATE_LENS_URL, si no OXIDEGATE_PORT, si no lo que el
+    propio proxy declara en ~/.config/oxidegate/proxy.log, y si no los
+    puertos habituales (8080, 8899).
+
+    En TODOS los casos comprueba que quien contesta es OxideGate de verdad
+    antes de creerle. Que algo responda en un puerto no lo convierte en el
+    proxy: el 8080 lo suelen ocupar Apache, Tomcat o Jenkins, y un reporte
+    escrito a partir de sus respuestas sería inventado.
+
+    OXIDEGATE_LENS_URL es un PIN: si la fijas, no se busca en ningún otro
+    sitio. OXIDEGATE_PORT es una pista — si ahí no está el proxy, se sigue
+    buscando y se te avisa por stderr de que se ignoró.
 
 VER TAMBIÉN:
     oxidegate-mcp    elige qué servidores MCP se preservan al arrancar
@@ -687,7 +759,9 @@ async function main() {
     return;
   }
 
-  const baseUrl = resolveBaseUrl();
+  const found = await discoverEndpoint();
+  const baseUrl = found.baseUrl;
+  announceOverride(found);
 
   if (args.includes('--doctor')) {
     await runDoctor(baseUrl);
@@ -700,7 +774,16 @@ async function main() {
   ]);
 
   if (!Array.isArray(requests) || requests.length === 0) {
-    process.stderr.write('oxidegate-lens: the proxy has not seen any request yet.\n');
+    // Nombrar el endpoint no es adorno. Esta frase describía dos situaciones
+    // incompatibles —el proxy correcto sin tráfico, y un okupa en el puerto
+    // contestando cualquier cosa— y la segunda tuvo la herramienta rota
+    // durante meses. Ahora que la lente busca el proxy sola, el usuario ya no
+    // sabe de memoria a quién preguntó: hay que decírselo.
+    process.stderr.write(
+      `oxidegate-lens: ${baseUrl} es OxideGate, pero no ha visto ninguna petición todavía.\n` +
+        `  Enruta tu agente a través del proxy y vuelve a pedir el reporte. ` +
+        `Con --doctor tienes la cadena entera.\n`,
+    );
     process.exit(1);
   }
 
