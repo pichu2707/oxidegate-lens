@@ -153,7 +153,13 @@ test('render WARNS when the list is being edited while the switch is off', () =>
   // Marcar protegidos con el interruptor apagado no protege de nada: no se
   // desconecta nadie. Dejar al usuario rellenar esa lista sin decírselo es
   // dejarle configurar el vacío.
-  assert.match(out, /no se desconectará ninguno|desactivad/i);
+  //
+  // Se asserta la INTENCIÓN, no la redacción: que diga que está apagada, y
+  // que las marcas no sirven de nada mientras lo esté. La versión anterior
+  // fijaba la frase literal y se rompió al reescribir el selector, sin que
+  // la garantía hubiera dejado de cumplirse ni un momento.
+  assert.match(out, /apagada|desactivad|no se apaga ninguno/i, 'debe decir que está apagada');
+  assert.match(out, /marcas no hacen nada|no cambian nada/i, 'y que marcar no sirve de nada así');
 });
 
 test('render never invents a price for a server nobody measured', () => {
@@ -310,4 +316,61 @@ test('el binario no vuelve a construir el pie por su cuenta', async () => {
   assert.ok(!/Lo aplica:/.test(src), 'y quién lo aplica también');
   const renders = src.match(/renderEditor\(state, \{ configPath:/g) ?? [];
   assert.equal(renders.length, 2, 'los DOS caminos —imprimir y TUI— deben pasar la ruta, o uno se queda mudo');
+});
+
+// =======================================================================
+// LEGIBILIDAD DEL SELECTOR (issue #25)
+//
+// Un usuario real quería apagar context7 y acabó con la válvula entera
+// apagada y los dos servidores arrancando conectados. No fue torpeza: el
+// selector no dice en ninguna parte qué teclas existen, así que se
+// descubren pulsando — y una de ellas apaga la función entera.
+//
+// Y la fila seguía afirmando "se desconecta al arrancar" con el
+// interruptor apagado. El pie lo desmentía tres líneas más abajo, pero la
+// fila se lee primero: un dato falso corregido después sigue siendo falso.
+// =======================================================================
+
+test('el render SIEMPRE enseña las teclas: no se descubren pulsando', () => {
+  const out = renderEditor(baseState());
+
+  assert.match(out, /espacio/i, 'la tecla que marca');
+  assert.match(out, /\bd\b/, 'la que alterna la válvula — la que apagó a un usuario sin querer');
+  assert.match(out, /enter/i, 'la que guarda');
+  assert.match(out, /\bq\b/i, 'la que sale');
+});
+
+test('con la válvula APAGADA, ninguna fila puede decir que algo se desconecta', () => {
+  const out = renderEditor(toggleDisableByDefault(baseState()));
+
+  const filas = out.split('\n').filter((l) => l.includes('context7') || l.includes('engram'));
+  assert.ok(filas.length >= 2, 'las filas siguen estando');
+  for (const fila of filas) {
+    assert.doesNotMatch(
+      fila,
+      /se desconecta|se apaga/i,
+      `la fila afirma algo que no va a pasar: ${fila}`,
+    );
+  }
+});
+
+test('con la válvula ENCENDIDA la fila no marcada sí dice que se apaga', () => {
+  const out = renderEditor(baseState());
+  const fila = out.split('\n').find((l) => l.includes('context7'));
+
+  assert.match(fila, /se apaga|se desconecta/i, 'sin esto la fila no dice qué le va a pasar');
+});
+
+test('el render suma lo que ahorras: el dato ya estaba y no se sumaba en ningún sitio', () => {
+  const out = renderEditor(baseState());
+
+  // context7 (4.6 kB) no está protegido, engram (17.2 kB) sí. Se ahorra el primero.
+  assert.match(out, /4\.6 kB/, 'el total del ahorro debe aparecer');
+  assert.match(out, /ahorr/i, 'y decir que es un ahorro, no un número suelto');
+});
+
+test('con la válvula apagada no se anuncia ningún ahorro, porque no lo hay', () => {
+  const out = renderEditor(toggleDisableByDefault(baseState()));
+
+  assert.doesNotMatch(out, /ahorras \d/i, 'prometer un ahorro que no va a ocurrir es peor que no decir nada');
 });
