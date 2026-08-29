@@ -119,6 +119,8 @@
 // `client` is now printed once, in the header line, purely informational —
 // it decides nothing, not even one extra sentence.
 
+import { readFileSync, rmSync } from 'node:fs';
+
 import { readDeclaredMcpServers, sanitizeServerName } from '../lib/mcp-config.mjs';
 import { readMcpSavingsSnapshot } from '../lib/mcp-snapshot.mjs';
 import { observeMcpUsage } from '../lib/mcp-usage.mjs';
@@ -127,6 +129,11 @@ import { readProtectedServers, readDisableByDefault } from '../lib/mcp-protectio
 import { diagnose } from '../lib/mcp-doctor.mjs';
 import { readProjectConfig, readApprovals } from '../lib/mcp-project-config.mjs';
 import { buildEndpointCandidates, chooseEndpoint, readProxyLogUrl } from '../lib/mcp-endpoint.mjs';
+import {
+  resolveOpenCodeCachePath,
+  readCachedPluginVersion,
+  diagnoseCache,
+} from '../lib/mcp-opencode-cache.mjs';
 
 const DEFAULT_PORT = 8080;
 
@@ -134,6 +141,25 @@ const DEFAULT_PORT = 8080;
 // wait. Two seconds for a localhost round trip is fine; a blank terminal
 // because we gave up after 300ms is not.
 const FETCH_TIMEOUT_MS = 2000;
+
+/**
+ * La versión que ESTÁ CORRIENDO, leída del propio package.json del paquete.
+ *
+ * Se lee del disco y no se escribe a mano en una constante a propósito: una
+ * versión duplicada en el código es una que alguien olvidará subir en la
+ * siguiente release, y entonces el diagnóstico de la caché compararía contra
+ * un número inventado. Ilegible se queda en null, y el módulo lo traduce a
+ * `unknown` — nunca a un "todo en orden".
+ */
+const LENS_VERSION = (() => {
+  try {
+    return JSON.parse(
+      readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ).version;
+  } catch {
+    return null;
+  }
+})();
 
 /**
  * Encuentra el proxy sin preguntarle el puerto al usuario.
@@ -183,6 +209,37 @@ function announceOverride(found) {
     `oxidegate-lens: ${found.overrode.baseUrl} responde, pero no es OxideGate — ` +
       `se ignora ${found.overrode.source === 'env-port' ? 'OXIDEGATE_PORT' : 'la URL configurada'}.\n` +
       `  Usando ${found.baseUrl}, que es donde ${SOURCE_LABEL[found.source] ?? 'se encontró el proxy'}.\n`,
+  );
+}
+
+/**
+ * Borra la copia que OpenCode guarda de ESTE paquete, y nada más.
+ *
+ * Es la única acción destructiva de todo el binario, así que:
+ *
+ *   - Va detrás de un flag explícito. Nunca como efecto secundario de mirar.
+ *   - Dice la ruta ANTES de borrarla, para que se pueda leer y abortar.
+ *   - Toca únicamente el directorio de este paquete. La caché de OpenCode
+ *     tiene los plugins de todo el mundo dentro; llevarse por delante los
+ *     ajenos para arreglar el propio sería un remedio peor que la avería.
+ *   - Si no hay nada, lo dice y sale con 0. Borrar lo inexistente no es un
+ *     error, y hacerlo fallar mandaría a investigar un problema que no hay.
+ */
+function clearOpenCodeCache() {
+  const path = resolveOpenCodeCachePath({});
+  const cached = readCachedPluginVersion({});
+
+  if (cached.status === 'absent') {
+    process.stdout.write(`oxidegate-lens: no hay caché que limpiar en ${path}\n`);
+    return;
+  }
+
+  const version = cached.status === 'known' ? ` (tenía la ${cached.version})` : '';
+  rmSync(path, { recursive: true, force: true });
+  process.stdout.write(
+    `oxidegate-lens: borrada la caché de OpenCode${version}\n` +
+      `  ${path}\n` +
+      `  Vuelve a instalar el plugin: opencode plugin oxidegate-lens\n`,
   );
 }
 
@@ -651,6 +708,8 @@ const HELP = `oxidegate-savings — qué pesa cada servidor MCP en el cable
 USO:
     oxidegate-savings            El reporte completo
     oxidegate-savings --doctor   Diagnostica la cadena y dice qué eslabón falla
+    oxidegate-savings --clear-opencode-cache
+                                 Borra la copia del plugin que guarda OpenCode
     oxidegate-savings --help     Muestra esta ayuda
 
 DÓNDE MIRA:
@@ -730,6 +789,12 @@ async function runDoctor(baseUrl) {
     flattened: withTools.some((r) => r.tools_flattened === true),
     snapshot: readMcpSavingsSnapshot({}),
     protection: readProtectedServers({ projectConfig }),
+    // La copia que OpenCode se guarda del plugin. Se recoge SIEMPRE: es un
+    // eslabón que se queda viejo sin avisar, y ya costó una tarde entera.
+    opencodeCache: diagnoseCache({
+      cached: readCachedPluginVersion({}),
+      running: LENS_VERSION,
+    }),
     switchResult: readDisableByDefault({ projectConfig }),
     projectConfig,
   });
@@ -756,6 +821,11 @@ async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
     process.stdout.write(HELP);
+    return;
+  }
+
+  if (args.includes('--clear-opencode-cache')) {
+    clearOpenCodeCache();
     return;
   }
 
