@@ -36,6 +36,15 @@ const sano = {
   // trae. Omitirla dejaría la comprobación en `unknown` —correcto por la
   // regla del módulo— y ningún estado "sano" podría llegar a veredicto ok.
   opencodeCache: { status: 'match', cached: '0.6.1', running: '0.6.1' },
+  // Mismo motivo que opencodeCache: el binario SIEMPRE sondea /version, así
+  // que un estado sano trae un contrato conocido, no un unknown por omisión.
+  version: {
+    status: 'known',
+    contract: 1,
+    endpoints: ['/health', '/stats', '/sessions', '/requests', '/mcp', '/history'],
+    fields: ['tool_names', 'session'],
+    oxidegate: '0.13.0',
+  },
 };
 
 const check = (result, id) => result.checks.find((c) => c.id === id);
@@ -211,4 +220,65 @@ test('caché ilegible -> unknown, nunca ok', () => {
 
   assert.equal(check(result, 'opencode-cache').status, 'unknown');
   assert.notEqual(result.verdict, 'ok', 'un unknown impide declarar que todo está bien');
+});
+
+// =======================================================================
+// Comprobación 'version' — lo que declara GET /version (issue #30).
+//
+// OxideGate publica /version, un endpoint de CAPACIDADES, y hasta ahora la
+// lens nunca lo consultaba: no podía distinguir "el proxy no soporta esto"
+// de "aquí no había dato". El mismo fallo que ya mordió dos veces
+// (tool_names, /health) — ver la cabecera de este fichero.
+//
+// La regla propia de esta comprobación: un 404 en /version NO es un fallo
+// de sondeo, es la respuesta AFIRMATIVA "este proxy es anterior al
+// contrato" — y por eso `lib/proxy-version.mjs` lo modela como
+// `{ status: 'known', reason: 'pre-contract' }`. Aquí se traduce a un
+// aviso, nunca a un unknown ni a un ok silencioso.
+// =======================================================================
+
+test('version conocida con contrato -> ok, y dice versión, contrato y cuántos endpoints/campos declara', () => {
+  const result = diagnose({
+    ...sano,
+    version: {
+      status: 'known',
+      contract: 1,
+      endpoints: ['/health', '/stats', '/sessions', '/requests', '/mcp', '/history'],
+      fields: ['tool_names', 'session'],
+      oxidegate: '0.13.0',
+    },
+  });
+
+  const v = check(result, 'version');
+  assert.equal(v.status, 'ok');
+  const texto = `${v.title} ${v.detail}`;
+  assert.match(texto, /0\.13\.0/, 'debe nombrar la versión de OxideGate');
+  assert.match(texto, /contrato 1\b/, 'debe nombrar el número de contrato');
+  assert.match(texto, /\b6\b/, 'seis endpoints declarados');
+  assert.match(texto, /\b2\b/, 'dos campos declarados');
+});
+
+test('version pre-contract -> warn, y explica que hay que actualizar OxideGate', () => {
+  const result = diagnose({ ...sano, version: { status: 'known', reason: 'pre-contract' } });
+
+  const v = check(result, 'version');
+  assert.equal(v.status, 'warn');
+  const texto = `${v.title} ${v.detail} ${v.action}`;
+  assert.match(texto, /versi[oó]n/i);
+  assert.match(texto, /actualiza/i, 'debe decir qué hacer, no solo el síntoma');
+});
+
+test('version unknown (proxy inalcanzable o timeout) -> unknown, JAMÁS ok', () => {
+  const result = diagnose({ ...sano, version: { status: 'unknown', reason: 'timeout' } });
+
+  const v = check(result, 'version');
+  assert.equal(v.status, 'unknown');
+  assert.match(v.detail, /timeout/, 'la razón real debe nombrarse');
+});
+
+test('version ausente por completo (observación no recogida) -> unknown, no ok por defecto', () => {
+  const { version, ...sinVersion } = sano;
+  const result = diagnose(sinVersion);
+
+  assert.equal(check(result, 'version').status, 'unknown');
 });
