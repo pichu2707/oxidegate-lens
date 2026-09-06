@@ -54,6 +54,21 @@ const FILA_NO_ATRIBUIDA_REAL = {
   fixed_toll: { hooks: null, instructions: null, skills: null },
 };
 
+// hallazgo 3 (issue #18, revisión adversarial): is_session:false NO implica
+// coste 0 — el proxy sí midió este cliente, sólo no sabe pinchárselo a una
+// sesión. Tirar el importe es perder dinero real del informe.
+const FILA_NO_ATRIBUIDA_CON_COSTE = {
+  key: 'cliente_con_coste',
+  is_session: false,
+  source: 'unattributed',
+  cost_usd: 42.5,
+  requests: 10,
+  input_tokens: 100,
+  cache_read_tokens: 0,
+  output_tokens: 0,
+  fixed_toll: { hooks: null, instructions: null, skills: null },
+};
+
 test('--help imprime la ayuda y sale con 0, sin tocar la red', async () => {
   const { stdout, code } = await runSessionsCli({ baseUrl: 'http://127.0.0.1:1', args: ['--help'] });
   assert.equal(code, 0);
@@ -216,6 +231,72 @@ test('regla 2 (totales): el total no atribuido NUNCA imprime "0.0000 $" ni "0,00
     assert.ok(!totalNoAtribuido.includes('0.0000 $'));
     assert.ok(!totalNoAtribuido.includes('0,0000 $'));
     assert.ok(totalNoAtribuido.includes('no atribuible'));
+  } finally {
+    await mock.close();
+  }
+});
+
+// ------------------------------------------------------------- hallazgo 3
+
+test('hallazgo 3: una fila no-sesión con coste > 0 imprime el IMPORTE — el coste SÍ se midió, sólo falta la asignación a una sesión', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_NO_ATRIBUIDA_CON_COSTE] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const noAtribuidoBlock = stdout.split('NO ATRIBUIDO')[1].split('EL PEAJE FIJO')[0];
+    assert.ok(noAtribuidoBlock.includes('42,5000 $'), `debe aparecer el importe medido: ${noAtribuidoBlock}`);
+    const filaLine = noAtribuidoBlock.split('\n').find((l) => l.includes('cliente_con_coste'));
+    assert.ok(filaLine, 'debe existir la línea de la fila');
+    assert.ok(!filaLine.includes('no atribuible'), 'no debe marcarse "no atribuible" cuando hay un importe real');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('hallazgo 3: is_session:false + cost_usd:0 sigue marcándose "no atribuible" SIN cifra — comportamiento correcto, no cambia', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_NO_ATRIBUIDA_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const noAtribuidoBlock = stdout.split('NO ATRIBUIDO')[1].split('EL PEAJE FIJO')[0];
+    const filaLine = noAtribuidoBlock.split('\n').find((l) => l.includes('unattributed'));
+    assert.ok(filaLine.includes('no atribuible'));
+    assert.ok(!/\d[.,]\d+\s?\$/.test(filaLine));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('hallazgo 3 (totales): el total del bloque (b) suma los costes conocidos > 0 y se marca COTA INFERIOR cuando hay filas sin precio', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_NO_ATRIBUIDA_CON_COSTE, FILA_NO_ATRIBUIDA_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const totalNoAtribuido = stdout.split('\n').find((l) => l.trim().startsWith('total no atribuido'));
+    assert.ok(totalNoAtribuido, 'debe existir la línea de total no atribuido');
+    assert.ok(totalNoAtribuido.includes('42,5000 $'), `debe sumar el coste conocido: ${totalNoAtribuido}`);
+    assert.ok(totalNoAtribuido.includes('cota inferior'), 'debe marcarse como cota inferior por la fila sin precio');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('hallazgo 3 (totales): si TODAS las filas no atribuidas tienen coste 0/desconocido, el total sigue diciendo "no atribuible", sin cifra', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_NO_ATRIBUIDA_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const totalNoAtribuido = stdout.split('\n').find((l) => l.trim().startsWith('total no atribuido'));
+    assert.ok(totalNoAtribuido.includes('no atribuible'));
+    assert.ok(!totalNoAtribuido.includes('cota inferior'));
   } finally {
     await mock.close();
   }

@@ -20,9 +20,16 @@
 //
 //   (b) NO ATRIBUIDO A UNA SESIÓN — rows where `is_session === false`. These
 //       are per-client buckets (User-Agent), NOT sessions, and are NEVER
-//       ranked or merged with (a). Their tokens are real and are shown;
-//       their cost is marked "no atribuible" in the SAME line, never a bare
-//       "0,0000 $" that reads as "this bucket cost nothing".
+//       ranked or merged with (a). Their tokens are real and are shown. Cost
+//       is a THIRD distinction, not the same as the classification above
+//       (hallazgo 3, issue #18 adversarial review): `costUsd === null` is
+//       "desconocido"; `costUsd === 0` is the proxy saying it could not
+//       price this bucket at all — marked "no atribuible", NEVER a bare
+//       "0,0000 $" that reads as "this bucket cost nothing"; `costUsd > 0`
+//       IS printed as a real amount — it was measured, what's missing is
+//       the session it belongs to, not the money. Dropping a real positive
+//       figure here is lost spend, exactly what `assertNoDroppedSpend`
+//       guards against in the sibling binary.
 //
 //   (c) EL PEAJE FIJO POR TURNO — `fixed_toll.{hooks,instructions,skills}`.
 //       This is the reason this lens exists: a fixed per-turn payload (a
@@ -203,18 +210,15 @@ function pad(value, width, align = 'left') {
 /**
  * Línea de un total. Semántica `sumOrUnknown`: un campo `null` se imprime
  * como "desconocido", nunca como una suma parcial disfrazada de completa.
- * `costNote`, si se pasa, se añade EN LA MISMA línea que la cifra de coste —
- * nunca en un párrafo aparte (issue #18, regla 2).
+ * `costText`, si se pasa, SUSTITUYE por completo la cifra de coste por
+ * defecto — usado por el bloque (b), cuyo coste no sigue la semántica
+ * `sumOrUnknown` normal (ver `unattributedCostText`, hallazgo 3).
  */
-function formatTotalLine(label, totals, { saturated, costNote } = {}) {
+function formatTotalLine(label, totals, { saturated, costText } = {}) {
   const satTag = saturated ? ' [cota inferior — registro saturado, ver aviso arriba]' : '';
-  // `costNote` marca un grupo categóricamente no atribuible (bloque b): el
-  // hueco del coste lleva la MARCA, nunca una cifra — ni siquiera un `0`
-  // real (defecto #1, issue #18). Un total `null` ya no lleva número
-  // ("desconocido"); no hace falta añadirle la marca encima.
-  const costText = costNote ? costNote : totals.cost === null ? 'desconocido' : formatUsd(totals.cost);
+  const resolvedCostText = costText !== undefined ? costText : totals.cost === null ? 'desconocido' : formatUsd(totals.cost);
   const parts = [
-    `coste=${costText}`,
+    `coste=${resolvedCostText}`,
     `turnos=${totals.requests === null ? 'desconocido' : formatInt(totals.requests)}`,
     `entrada=${totals.inputTokens === null ? 'desconocido' : formatInt(totals.inputTokens)}`,
     `cache_leída=${totals.cacheReadTokens === null ? 'desconocido' : formatInt(totals.cacheReadTokens)}`,
@@ -253,6 +257,55 @@ function writeSessionsBlock(report) {
 // ---------------------------------------------------------------------
 // (b) NO ATRIBUIDO A UNA SESIÓN
 // ---------------------------------------------------------------------
+
+/**
+ * Coste de UNA fila del bloque (b) — hallazgo 3 (issue #18, revisión
+ * adversarial): la especificación anterior confundía "no atribuible a una
+ * sesión" con "gratis". Corregido:
+ *   - `null` (campo ausente)      -> "desconocido".
+ *   - `0` (el proxy no le puso precio) -> la MARCA, sin cifra: un `0`
+ *     impreso ahí se lee como "gratis" y miente (ver `unattributed` real:
+ *     400.919 tokens de entrada a coste 0, que costaron dinero de verdad).
+ *   - `> 0` (el proxy SÍ midió un coste) -> se imprime el IMPORTE. Lo que no
+ *     es atribuible es la SESIÓN, no el dinero — tirarlo es perder coste
+ *     real del informe.
+ */
+function unattributedRowCostText(costUsd) {
+  if (costUsd === null) return 'desconocido';
+  if (costUsd === 0) return 'no atribuible';
+  return formatUsd(costUsd);
+}
+
+/**
+ * Coste del TOTAL del bloque (b) — misma corrección que
+ * `unattributedRowCostText`, pero a nivel de grupo: sumar cifras conocidas
+ * que son `0` (sin precio) contaría "gratis" como dinero real, así que se
+ * excluyen de la suma. Si NINGUNA fila tiene un coste > 0 conocido, el total
+ * no tiene nada que sumar y se marca "no atribuible", igual que una fila
+ * individual. Si HAY una mezcla (algo conocido + algo sin precio), la suma
+ * de lo conocido se marca COTA INFERIOR — mismo lenguaje que `saturated` —
+ * porque descartar en silencio lo que no se pudo sumar sería tan deshonesto
+ * como el defecto original que perdía el dinero entero.
+ */
+function unattributedCostText(rows) {
+  if (rows.length === 0) return formatUsd(0);
+  let sum = 0;
+  let sawKnownPositive = false;
+  let sawUnpriced = false;
+  for (const row of rows) {
+    if (row.costUsd === null || row.costUsd === 0) {
+      sawUnpriced = true;
+      continue;
+    }
+    sum += row.costUsd;
+    sawKnownPositive = true;
+  }
+  if (!sawKnownPositive) return 'no atribuible';
+  return sawUnpriced
+    ? `${formatUsd(sum)} [cota inferior — hay filas sin precio (0 o desconocido), no incluidas en la suma]`
+    : formatUsd(sum);
+}
+
 function writeUnattributedBlock(report) {
   // La explicación larga de qué son estos cubos y por qué su coste no es
   // atribuible va AQUÍ, una sola vez (defecto #4, issue #18) — no repetida
@@ -261,8 +314,9 @@ function writeUnattributedBlock(report) {
   // hacer con dos bloques de la misma forma de dato.
   process.stdout.write(
     '\nNO ATRIBUIDO A UNA SESIÓN (cubos por cliente/user-agent, is_session:false — su coste\n' +
-      'no es el coste de una sesión, y por eso el hueco del coste lleva la marca, nunca una\n' +
-      'cifra; NUNCA rankeados junto a las sesiones de arriba):\n',
+      'no es el coste de una sesión: si el proxy no pudo ponerle precio (0 o ausente), el hueco\n' +
+      'del coste lleva la marca, nunca una cifra falsa; si SÍ lo midió, se imprime el importe —\n' +
+      'lo que falta es la sesión, no el dinero. NUNCA rankeados junto a las sesiones de arriba):\n',
   );
   if (report.unattributed.length === 0) {
     process.stdout.write('  no hay filas no atribuidas en esta ventana.\n');
@@ -274,10 +328,7 @@ function writeUnattributedBlock(report) {
       `${pad('ENTRADA', 10, 'right')}  ${pad('CACHE_LEÍDA', 12, 'right')}  ${pad('SALIDA', 10, 'right')}\n`,
   );
   for (const row of report.unattributed) {
-    // Marca corta en el hueco del coste — NUNCA un número, ni siquiera un
-    // `0` real (defecto #1). La explicación larga ya salió en la cabecera
-    // de arriba, una sola vez.
-    const costText = row.costUsd === null ? 'desconocido' : 'no atribuible';
+    const costText = unattributedRowCostText(row.costUsd);
     process.stdout.write(
       `  ${pad(truncateKey(row.key), 28)}  ` +
         `${pad(row.requests === null ? '-' : formatInt(row.requests), 6, 'right')}  ` +
@@ -542,7 +593,7 @@ async function main() {
   process.stdout.write(
     formatTotalLine('no atribuido', report.totals.unattributed, {
       saturated: report.saturated,
-      costNote: 'no atribuible',
+      costText: unattributedCostText(report.unattributed),
     }),
   );
 
