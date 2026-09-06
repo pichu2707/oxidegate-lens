@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 
 /**
  * Starts a throwaway HTTP server serving canned JSON at GET /requests,
- * GET /stats and GET /health.
+ * GET /stats, GET /health and GET /version.
  *
  * `/health` está aquí porque un OxideGate real lo sirve desde 0.3.0, y el
  * diagnóstico (`--doctor`) lo consulta. Un mock que no lo sirviera haría que
@@ -20,10 +20,22 @@ import { createServer } from 'node:http';
  * representar el sistema, no una versión anterior de él. Pásalo a `false`
  * para simular deliberadamente un proxy previo a 0.3.0.
  *
- * @param {{ requests?: unknown[], stats?: unknown[], health?: boolean }} fixtures
+ * `/version` es el endpoint de CAPACIDADES que lee `lib/proxy-version.mjs`.
+ * Tres estados configurables:
+ *   - sin pasar `version` (default): 404 — el mismo comportamiento que un
+ *     OxideGate real anterior a la introducción del endpoint. Es el default
+ *     A PROPÓSITO: la mayoría de los tests de --doctor no hablan de
+ *     capacidades y no deben tener que declarar nada para seguir
+ *     representando un proxy real y viejo.
+ *   - `version: {...}`: responde 200 con ese objeto tal cual, como el
+ *     contrato real (`{contract, endpoints, fields, oxidegate}`).
+ *   - `version: 'fail'`: destruye el socket sin responder, para simular un
+ *     fallo de red a media petición.
+ *
+ * @param {{ requests?: unknown[], stats?: unknown[], health?: boolean, version?: object|'fail' }} fixtures
  * @returns {Promise<{ url: string, close: () => Promise<void> }>}
  */
-export function startMockOxideGate({ requests = [], stats = [], health = true } = {}) {
+export function startMockOxideGate({ requests = [], stats = [], health = true, version } = {}) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       if (req.url === '/health') {
@@ -34,6 +46,20 @@ export function startMockOxideGate({ requests = [], stats = [], health = true } 
         }
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok' }));
+        return;
+      }
+      if (req.url === '/version') {
+        if (version === 'fail') {
+          req.socket.destroy();
+          return;
+        }
+        if (version === undefined) {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'not found' }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(version));
         return;
       }
       const body = req.url === '/requests' ? requests : req.url === '/stats' ? stats : null;

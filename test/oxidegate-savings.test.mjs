@@ -1309,7 +1309,19 @@ test('--doctor: con el proxy sano imprime el diagnóstico completo y sale con 0'
   const snap = await makeFakeSnapshot({
     mcpMeasurement: [{ server: 'engram', enabled: true, tokens: 100, bytes: 500, ok: true }],
   });
-  const mock = await startMockOxideGate({ requests: requestsWindow({ count: 3, spanMs: 60_000 }), stats: [] });
+  const mock = await startMockOxideGate({
+    requests: requestsWindow({ count: 3, spanMs: 60_000 }),
+    stats: [],
+    // Sano de verdad tiene que incluir /version: sin este fixture el mock
+    // 404-ea esa ruta por defecto y el proxy "sano" degrada a pre-contract,
+    // lo que este test nunca aseveraba — la regresión que fija.
+    version: {
+      contract: 1,
+      endpoints: ['/health', '/stats', '/sessions', '/requests', '/mcp', '/history'],
+      fields: ['tool_names', 'session'],
+      oxidegate: '0.13.0',
+    },
+  });
 
   const { stdout, code } = await runSavingsCli({
     baseUrl: mock.url,
@@ -1325,6 +1337,7 @@ test('--doctor: con el proxy sano imprime el diagnóstico completo y sale con 0'
   assert.match(stdout, /diagnóstico de la cadena/);
   assert.match(stdout, /El proxy responde/);
   assert.match(stdout, /peticiones observadas/);
+  assert.match(stdout, /\bOK\b.*Todo comprobado y en orden/i, 'un test llamado "con el proxy sano" tiene que asegurar que el veredicto ES sano');
 });
 
 test('--doctor: contra un puerto muerto DIAGNOSTICA en vez de morir', async () => {
@@ -1382,4 +1395,117 @@ test('--doctor: un proxy anterior a 0.3.0 (sin /health) se declara ROTO, y dice 
   assert.match(stdout, /health devuelve 404/i);
   assert.match(stdout, /SILENCIO/i, 'la consecuencia es lo que lo hacía indiagnosticable');
   assert.match(stdout, /BROKEN/);
+});
+
+// =======================================================================
+// --doctor lee GET /version (issue #30).
+//
+// OxideGate publica /version, un endpoint de CAPACIDADES, y hasta ahora la
+// lens nunca lo consultaba — no podía distinguir "el proxy no soporta esto"
+// de "aquí no había dato". Estos tests fijan el cableado END TO END: el
+// binario tiene que sondear /version de verdad y pasar la observación al
+// doctor, no solo la lógica interna de lib/mcp-doctor.mjs (ya cubierta en
+// test/mcp-doctor.test.mjs).
+// =======================================================================
+
+test('--doctor: el proxy publica su contrato en /version -> lo reporta con versión, contrato y cuántos endpoints/campos', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({ missing: true });
+  const mock = await startMockOxideGate({
+    requests: requestsWindow({ count: 3, spanMs: 60_000 }),
+    stats: [],
+    version: {
+      contract: 1,
+      endpoints: ['/health', '/stats', '/sessions', '/requests', '/mcp', '/history'],
+      fields: ['tool_names', 'session'],
+      oxidegate: '0.13.0',
+    },
+  });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+    args: ['--doctor'],
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  assert.match(stdout, /0\.13\.0/, 'debe nombrar la versión que declaró /version');
+  assert.match(stdout, /contrato 1/, 'debe nombrar el número de contrato');
+});
+
+test('--doctor: un proxy sin /version (404) avisa que es anterior al contrato, y NO lo trata como roto', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({ missing: true });
+  // Sin `version` configurado, el mock responde 404 a /version — el mismo
+  // comportamiento que un OxideGate real anterior a la introducción del
+  // endpoint.
+  const mock = await startMockOxideGate({ requests: requestsWindow({ count: 3, spanMs: 60_000 }), stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+    args: ['--doctor'],
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0, 'pre-contrato es un aviso, no un eslabón roto');
+  assert.match(stdout, /anterior a \/version/i);
+  assert.match(stdout, /actualiza/i, 'debe decir qué hacer, no solo el síntoma');
+  assert.doesNotMatch(stdout, /BROKEN/);
+  // Un proxy que SÍ es OxideGate (/requests responde) pero es anterior a
+  // /version no está sano del todo: el veredicto tiene que bajar a DEGRADED,
+  // no quedarse en OK. No estaba fijado en ningún sitio a nivel CLI.
+  assert.match(stdout, /\bDEGRADED\b/, 'pre-contract degrada el veredicto global, no lo esconde');
+});
+
+test('--doctor: un intruso en el puerto (no es OxideGate) que 404-ea /version NO dice "anterior a /version"', async () => {
+  // El agujero que este bloque fija: `readProxyVersion` no sabe qué hay al
+  // otro lado, así que un 404 de un intruso produce el mismo
+  // `{status:'known', reason:'pre-contract'}` que un OxideGate real y viejo.
+  // Antes del arreglo, `checkVersion` no comprobaba identidad y el doctor
+  // imprimía "tu OxideGate es anterior a /version" — una versión de
+  // OxideGate afirmada sobre un servicio que ni siquiera es OxideGate, dos
+  // líneas después de haber descartado que lo fuera.
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({ missing: true });
+  // El detalle que hace la trampa: /version debe 404 EXPLÍCITAMENTE (el
+  // comportamiento por defecto de casi cualquier servidor en una ruta que no
+  // conoce) para que `lib/proxy-version.mjs` lo degrade a
+  // `{status:'known', reason:'pre-contract'}` — el mismo objeto que un
+  // OxideGate real y viejo. Si el intruso devolviera HTML también en
+  // /version, ni siquiera llegaría a `pre-contract` (sería `unparseable`), y
+  // este test no reproduciría el escenario que rompía antes del arreglo.
+  const intruso = createServer((req, res) => {
+    if (req.url === '/version') {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=UTF-8' });
+    res.end('<!DOCTYPE html><html><body>no soy OxideGate</body></html>');
+  });
+  await new Promise((r) => intruso.listen(0, '127.0.0.1', r));
+  const port = intruso.address().port;
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: `http://127.0.0.1:${port}`,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+    args: ['--doctor'],
+  });
+  intruso.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 1, 'un okupa en el puerto es un eslabón roto: la identidad no se pudo confirmar');
+  assert.match(stdout, /Responde algo, pero no es OxideGate/i);
+  assert.doesNotMatch(stdout, /anterior a \/version/i, 'no puede afirmar una versión de OxideGate sobre algo que no es OxideGate');
+  assert.doesNotMatch(stdout, /brew upgrade oxidegate/i, 'el consejo de actualizar OxideGate no aplica a quien no es OxideGate');
 });

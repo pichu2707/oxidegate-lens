@@ -126,6 +126,7 @@ import { readMcpSavingsSnapshot } from '../lib/mcp-snapshot.mjs';
 import { observeMcpUsage } from '../lib/mcp-usage.mjs';
 import { buildValveRows } from '../lib/mcp-valve.mjs';
 import { readProtectedServers, readDisableByDefault } from '../lib/mcp-protection.mjs';
+import { readProxyVersion } from '../lib/proxy-version.mjs';
 import { diagnose } from '../lib/mcp-doctor.mjs';
 import { readProjectConfig, readApprovals } from '../lib/mcp-project-config.mjs';
 import { buildEndpointCandidates, chooseEndpoint, readProxyLogUrl } from '../lib/mcp-endpoint.mjs';
@@ -773,6 +774,12 @@ async function runDoctor(baseUrl) {
     // de la ruta. El módulo lo traduce a 'unknown', nunca a 'ok'.
   }
 
+  // /version es un endpoint de CAPACIDADES, no de telemetría — nunca lanza,
+  // ver lib/proxy-version.mjs. Un 404 aquí no es un fallo de sondeo: es la
+  // respuesta AFIRMATIVA "este proxy es anterior al contrato", y el doctor
+  // la traduce a un aviso, nunca a un unknown.
+  const version = await readProxyVersion({ baseUrl, timeoutMs: FETCH_TIMEOUT_MS });
+
   // El proyecto se lee UNA vez y se pasa a los dos lectores: así no se lee
   // el fichero dos veces ni se duplica la lógica de confianza.
   const projectConfig = readProjectConfig({ cwd: process.cwd(), approvals: readApprovals({}) });
@@ -785,6 +792,7 @@ async function runDoctor(baseUrl) {
     reachable,
     isOxidegate,
     healthCode,
+    version,
     requestCount: isOxidegate ? rows.length : null,
     flattened: withTools.some((r) => r.tools_flattened === true),
     snapshot: readMcpSavingsSnapshot({}),
