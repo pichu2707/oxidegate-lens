@@ -189,6 +189,36 @@ test('buildSessionReport: los totales de sessions y de unattributed son independ
   assert.equal(report.totals.unattributed.inputTokens, 39944);
 });
 
+// hallazgo 2 (issue #18, revisión adversarial): `unclassified` tiene su
+// propio total, igual de real que el de sessions/unattributed — nunca
+// desaparece sin dejar rastro, ni se mezcla con los otros dos grupos.
+test('buildSessionReport: `unclassified` tiene su PROPIO total, independiente de sessions y unattributed', () => {
+  const report = buildSessionReport({
+    saturated: false,
+    sessions: [
+      { key: 'ses', is_session: true, cost_usd: 1, requests: 3, input_tokens: 10, cache_read_tokens: 0, output_tokens: 0 },
+      { key: 'raro', cost_usd: 9.99, requests: 100, input_tokens: 99999, cache_read_tokens: 0, output_tokens: 0 },
+    ],
+  });
+  assert.equal(report.totals.unclassified.count, 1);
+  assert.equal(report.totals.unclassified.cost, 9.99);
+  assert.equal(report.totals.unclassified.inputTokens, 99999);
+  // no contamina el total de sessions
+  assert.equal(report.totals.sessions.inputTokens, 10);
+});
+
+test('buildSessionReport: `unclassified` vacío tiene un total real de ceros, no `undefined`', () => {
+  const report = buildSessionReport({ saturated: false, sessions: [] });
+  assert.deepEqual(report.totals.unclassified, {
+    count: 0,
+    cost: 0,
+    requests: 0,
+    inputTokens: 0,
+    cacheReadTokens: 0,
+    outputTokens: 0,
+  });
+});
+
 // -------------------------------------------------------- el peaje fijo (c)
 
 test('buildSessionReport: un miembro null de fixed_toll es "unmeasured", JAMÁS 0 bytes', () => {

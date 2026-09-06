@@ -69,6 +69,20 @@ const FILA_NO_ATRIBUIDA_CON_COSTE = {
   fixed_toll: { hooks: null, instructions: null, skills: null },
 };
 
+// hallazgo 2 (issue #18, revisión adversarial): `is_session` ausente o no
+// booleano NUNCA debe desaparecer del stdout — el peor incumplimiento del
+// invariante de este repo sería cometido por la lente que existe para
+// vigilarlo.
+const FILA_SIN_CLASIFICAR = {
+  key: 'raro_sin_clasificar',
+  cost_usd: 9.99,
+  requests: 100,
+  input_tokens: 99999,
+  cache_read_tokens: 0,
+  output_tokens: 0,
+  fixed_toll: { hooks: null, instructions: null, skills: null },
+};
+
 test('--help imprime la ayuda y sale con 0, sin tocar la red', async () => {
   const { stdout, code } = await runSessionsCli({ baseUrl: 'http://127.0.0.1:1', args: ['--help'] });
   assert.equal(code, 0);
@@ -297,6 +311,53 @@ test('hallazgo 3 (totales): si TODAS las filas no atribuidas tienen coste 0/desc
     const totalNoAtribuido = stdout.split('\n').find((l) => l.trim().startsWith('total no atribuido'));
     assert.ok(totalNoAtribuido.includes('no atribuible'));
     assert.ok(!totalNoAtribuido.includes('cota inferior'));
+  } finally {
+    await mock.close();
+  }
+});
+
+// ------------------------------------------------------------- hallazgo 2
+
+test('hallazgo 2: una fila con is_session ausente NO desaparece — sale en un tercer bloque "SIN CLASIFICAR" con su coste', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SIN_CLASIFICAR] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    assert.ok(stdout.includes('raro_sin_clasificar'), `la fila sin clasificar debe aparecer: ${stdout}`);
+    assert.ok(stdout.includes('9,9900 $'), `su coste debe aparecer: ${stdout}`);
+    assert.ok(stdout.includes('SIN CLASIFICAR'), 'debe existir un bloque para las filas sin clasificar');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('hallazgo 2: el bloque "SIN CLASIFICAR" NO aparece cuando no hay ninguna fila sin clasificar (no ensucia el caso normal)', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL, FILA_NO_ATRIBUIDA_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    assert.ok(!stdout.includes('SIN CLASIFICAR'));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('hallazgo 2: cuando is_session:false está vacío pero SÍ hay filas sin clasificar, el bloque (b) NO miente diciendo que no hay nada', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SIN_CLASIFICAR] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const noAtribuidoBlock = stdout.split('NO ATRIBUIDO')[1].split(/EL PEAJE FIJO|SIN CLASIFICAR/)[0];
+    assert.ok(
+      !noAtribuidoBlock.includes('no hay filas no atribuidas en esta ventana'),
+      `el mensaje miente cuando hay filas sin clasificar: ${noAtribuidoBlock}`,
+    );
   } finally {
     await mock.close();
   }

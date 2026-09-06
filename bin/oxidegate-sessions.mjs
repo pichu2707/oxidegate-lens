@@ -8,12 +8,12 @@
 // THIS REQUEST cost in bytes", this one answers a different question, in a
 // different currency: **what did THIS SESSION cost**. It reads `GET
 // /sessions` — an aggregation by `(source, key)` — and renders it, exactly
-// as read: it never measures anything itself, and it never merges its four
+// as read: it never measures anything itself, and it never merges its five
 // blocks into one verdict. See `lib/session-report.mjs` for the honesty
 // logic; this file owns discovery, the capabilities gate, the HTTP call,
 // and rendering only.
 //
-// FOUR INDEPENDENT BLOCKS, printed one after another, never merged:
+// FIVE INDEPENDENT BLOCKS, printed one after another, never merged:
 //
 //   (a) SESIONES — rows where `is_session === true`, sorted by cost
 //       descending. This is the report's real subject.
@@ -31,13 +31,21 @@
 //       figure here is lost spend, exactly what `assertNoDroppedSpend`
 //       guards against in the sibling binary.
 //
-//   (c) EL PEAJE FIJO POR TURNO — `fixed_toll.{hooks,instructions,skills}`.
+//   (c) SIN CLASIFICAR — rows where `is_session` came back missing or
+//       non-boolean (`lib/session-report.mjs`'s `unclassified`). Shown ONLY
+//       when non-empty, so the normal case (every row classified) stays
+//       clean. These rows are NEVER dropped and NEVER guessed into (a) or
+//       (b) — a proxy version skew or a corrupt row is not a coin flip
+//       either (hallazgo 2, issue #18 adversarial review). Their total is
+//       its own, never folded into (a)'s or (b)'s.
+//
+//   (d) EL PEAJE FIJO POR TURNO — `fixed_toll.{hooks,instructions,skills}`.
 //       This is the reason this lens exists: a fixed per-turn payload (a
 //       skill's system-prompt bytes, say) sent again on every turn it was
 //       present in. `null` prints as "no medido", never as "0 B" — see
 //       `lib/session-report.mjs`'s RULE 3.
 //
-//   (d) `saturated` — if the proxy's session registry filled up, the rows
+//   (e) `saturated` — if the proxy's session registry filled up, the rows
 //       above are a LOWER BOUND: some sessions/buckets never got a row of
 //       their own. This is stated next to the totals it invalidates, not as
 //       a footnote nobody reads.
@@ -319,7 +327,17 @@ function writeUnattributedBlock(report) {
       'lo que falta es la sesión, no el dinero. NUNCA rankeados junto a las sesiones de arriba):\n',
   );
   if (report.unattributed.length === 0) {
-    process.stdout.write('  no hay filas no atribuidas en esta ventana.\n');
+    // Hallazgo 2 (issue #18, revisión adversarial): decir "no hay filas no
+    // atribuidas" cuando SÍ hay filas sin clasificar (ver bloque de abajo)
+    // es falso — is_session:false está vacío, pero eso no significa que no
+    // haya nada sin pinchar a una sesión.
+    if (report.unclassified.length > 0) {
+      process.stdout.write(
+        '  no hay filas con is_session:false en esta ventana (sí hay filas SIN CLASIFICAR, ver el bloque de abajo).\n',
+      );
+    } else {
+      process.stdout.write('  no hay filas no atribuidas en esta ventana.\n');
+    }
     return;
   }
 
@@ -341,7 +359,46 @@ function writeUnattributedBlock(report) {
 }
 
 // ---------------------------------------------------------------------
-// (c) EL PEAJE FIJO POR TURNO
+// (c) SIN CLASIFICAR — hallazgo 2, issue #18 (revisión adversarial)
+// ---------------------------------------------------------------------
+// `lib/session-report.mjs` documenta `unclassified` como "never dropped,
+// never guessed into either block above", pero antes de este arreglo nada
+// aquí lo leía: una fila con `is_session` ausente o no booleano no aparecía
+// en ningún bloque, y el bloque (b) llegaba a decir "no hay filas no
+// atribuidas" con una fila así delante. Este bloque cierra ese hueco. Se
+// muestra SÓLO cuando no está vacío (report.unclassified.length > 0, ver
+// main()) para no ensuciar el caso normal, que es no tener ninguna.
+//
+// El coste de estas filas NO lleva la marca "no atribuible" de (b): esa
+// marca es la conclusión de que el proxy dijo explícitamente `is_session:
+// false`. Aquí el proxy no dijo nada clasificable — es un dato tal cual,
+// ni sesión ni no-sesión confirmada — así que se imprime sin adornos, con
+// la misma disciplina `null` -> "desconocido" que (a).
+function writeUnclassifiedBlock(report) {
+  process.stdout.write(
+    '\nSIN CLASIFICAR (is_session llegó ausente o no booleano en estas filas — un proxy más\n' +
+      'nuevo, más viejo, o un dato corrupto; por eso NO se adivinan hacia sesiones ni hacia no\n' +
+      'atribuido, y su total es el suyo propio, aparte de esos dos):\n',
+  );
+
+  process.stdout.write(
+    `  ${pad('CLAVE', 28)}  ${pad('TURNOS', 6, 'right')}  ${pad('COSTE', 12, 'right')}  ` +
+      `${pad('ENTRADA', 10, 'right')}  ${pad('CACHE_LEÍDA', 12, 'right')}  ${pad('SALIDA', 10, 'right')}\n`,
+  );
+  for (const row of report.unclassified) {
+    process.stdout.write(
+      `  ${pad(truncateKey(row.key), 28)}  ` +
+        `${pad(row.requests === null ? '-' : formatInt(row.requests), 6, 'right')}  ` +
+        `${pad(row.costUsd === null ? 'desconocido' : formatUsd(row.costUsd), 12, 'right')}  ` +
+        `${pad(row.inputTokens === null ? '-' : formatInt(row.inputTokens), 10, 'right')}  ` +
+        `${pad(row.cacheReadTokens === null ? '-' : formatInt(row.cacheReadTokens), 12, 'right')}  ` +
+        `${pad(row.outputTokens === null ? '-' : formatInt(row.outputTokens), 10, 'right')}\n`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------
+// (d) EL PEAJE FIJO POR TURNO
 // ---------------------------------------------------------------------
 function formatTollMember(name, member) {
   if (member.status === 'unmeasured') return `      ${name}: no medido\n`;
@@ -367,7 +424,7 @@ function tollRowHasMeasuredMember(row) {
 }
 
 /**
- * (c) es la tesis del N² medida — la razón de ser de esta lente (defecto
+ * (d) es la tesis del N² medida — la razón de ser de esta lente (defecto
  * #3, issue #18). Con muchas filas sin nada medido, listarlas una a una
  * entierra las pocas que sí dicen algo bajo "no medido" repetido: se
  * resumen en UNA línea con el recuento exacto, nunca se ocultan. Entre las
@@ -415,7 +472,7 @@ function writeFixedTollBlock(report) {
 }
 
 // ---------------------------------------------------------------------
-// (d) saturated
+// (e) saturated
 // ---------------------------------------------------------------------
 function writeSaturatedNotice(report) {
   if (!report.saturated) return;
@@ -583,6 +640,9 @@ async function main() {
 
   writeSessionsBlock(report);
   writeUnattributedBlock(report);
+  // Hallazgo 2: el bloque (c) sólo sale cuando hay algo que mostrar — no
+  // ensucia el caso normal (todas las filas clasificadas).
+  if (report.unclassified.length > 0) writeUnclassifiedBlock(report);
   writeFixedTollBlock(report);
   writeSaturatedNotice(report);
 
@@ -596,6 +656,12 @@ async function main() {
       costText: unattributedCostText(report.unattributed),
     }),
   );
+  // Mismo criterio que el bloque: el total de "sin clasificar" sólo aparece
+  // si hay algo sin clasificar — es un grupo aparte, nunca sumado a los de
+  // arriba (ver cabecera de lib/session-report.mjs).
+  if (report.unclassified.length > 0) {
+    process.stdout.write(formatTotalLine('sin clasificar', report.totals.unclassified, { saturated: report.saturated }));
+  }
 
   process.stdout.write(
     '\nnota: no mide crecimiento turno a turno dentro de una sesión — eso necesita /requests,\n' +
