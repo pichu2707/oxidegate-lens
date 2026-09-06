@@ -1,0 +1,701 @@
+#!/usr/bin/env node
+
+// oxidegate-sessions.mjs
+//
+// CONTRACT
+// --------
+// The SECOND lens (issue #18). Where `oxidegate-savings` answers "what does
+// THIS REQUEST cost in bytes", this one answers a different question, in a
+// different currency: **what did THIS SESSION cost**. It reads `GET
+// /sessions` — an aggregation by `(source, key)` — and renders it, exactly
+// as read: it never measures anything itself, and it never merges its five
+// blocks into one verdict. See `lib/session-report.mjs` for the honesty
+// logic; this file owns discovery, the capabilities gate, the HTTP call,
+// and rendering only.
+//
+// FIVE INDEPENDENT BLOCKS, printed one after another, never merged:
+//
+//   (a) SESIONES — rows where `is_session === true`, sorted by cost
+//       descending. This is the report's real subject.
+//
+//   (b) NO ATRIBUIDO A UNA SESIÓN — rows where `is_session === false`. These
+//       are per-client buckets (User-Agent), NOT sessions, and are NEVER
+//       ranked or merged with (a). Their tokens are real and are shown. Cost
+//       is a THIRD distinction, not the same as the classification above
+//       (hallazgo 3, issue #18 adversarial review): `costUsd === null` is
+//       "desconocido"; `costUsd === 0` is the proxy saying it could not
+//       price this bucket at all — marked "no atribuible", NEVER a bare
+//       "0,0000 $" that reads as "this bucket cost nothing"; `costUsd > 0`
+//       IS printed as a real amount — it was measured, what's missing is
+//       the session it belongs to, not the money. Dropping a real positive
+//       figure here is lost spend, exactly what `assertNoDroppedSpend`
+//       guards against in the sibling binary.
+//
+//   (c) SIN CLASIFICAR — rows where `is_session` came back missing or
+//       non-boolean (`lib/session-report.mjs`'s `unclassified`). Shown ONLY
+//       when non-empty, so the normal case (every row classified) stays
+//       clean. These rows are NEVER dropped and NEVER guessed into (a) or
+//       (b) — a proxy version skew or a corrupt row is not a coin flip
+//       either (hallazgo 2, issue #18 adversarial review). Their total is
+//       its own, never folded into (a)'s or (b)'s.
+//
+//   (d) EL PEAJE FIJO POR TURNO — `fixed_toll.{hooks,instructions,skills}`.
+//       This is the reason this lens exists: a fixed per-turn payload (a
+//       skill's system-prompt bytes, say) sent again on every turn it was
+//       present in. `null` prints as "no medido", never as "0 B" — see
+//       `lib/session-report.mjs`'s RULE 3.
+//
+//   (e) `saturated` — if the proxy's session registry filled up, the rows
+//       above are a LOWER BOUND: some sessions/buckets never got a row of
+//       their own. This is stated next to the totals it invalidates, not as
+//       a footnote nobody reads.
+//
+// THE QUADRANT THAT LOOKS LIKE A BUG AND ISN'T
+// ------------------------------------------------
+// A real row measured against a live 0.13.0 proxy:
+//
+//   key: "unattributed"  input_tokens: 400919  cost_usd: 0.0
+//
+// The single biggest token consumer reports a cost of exactly zero. That is
+// not a read failure and not "free" — it is `is_session: false`,
+// `source: 'unattributed'`: the proxy could not pin this spend on a session
+// at all. A report that ranked rows by cost, or printed that zero bare,
+// would hand the reader a confidently wrong headline built from real
+// numbers. See `lib/session-report.mjs`'s RULE 1 for the full argument, and
+// its unit test for the row that breaks the naive correlation on purpose
+// (`is_session: true` + `cost_usd: 0` — a real session, a real zero, still a
+// session).
+//
+// THE CAPABILITIES GATE — publishesEndpoint is TRI-STATE, and the middle
+// state is not a coin flip
+// ------------------------------------------------------------------
+//   true  -> the proxy told us it publishes `/sessions`. Proceed.
+//   false -> the proxy told us it does NOT. Say so and updates, and STOP —
+//            never render an empty table for a proxy that never had the
+//            endpoint to begin with.
+//   null  -> we could not ask (`/version` unreachable, timed out, or this
+//            proxy predates the capabilities contract). This is NOT `false`
+//            in disguise — it means "no answer", not "no". Try the actual
+//            request anyway, and only degrade to the "update your
+//            OxideGate" message if THAT comes back 404 — a fact the proxy
+//            just told us, not a guess this lens made on its behalf.
+//
+// `--since` — same contract as `/stats`'s `?since=`: a date (`YYYY-MM-DD`)
+// or a day count (`7d`). Passed straight through to the proxy, which
+// validates it and answers 400 with a message in Spanish that is already
+// good — this lens relays that message verbatim rather than writing its
+// own. Without `--since`, the header says the window covers everything the
+// proxy still retains; this lens has no idea what that retention window is,
+// and does not pretend to.
+
+import { buildSessionReport } from '../lib/session-report.mjs';
+import { readProxyVersion, publishesEndpoint } from '../lib/proxy-version.mjs';
+import { buildEndpointCandidates, chooseEndpoint, readProxyLogUrl } from '../lib/mcp-endpoint.mjs';
+
+const DEFAULT_PORT = 8080;
+
+// Interactive command a human runs on purpose — same budget as
+// bin/oxidegate-savings.mjs, for the same reason: a blank terminal because
+// we gave up after 300ms on a localhost round trip is worse than waiting.
+const FETCH_TIMEOUT_MS = 2000;
+
+const SOURCE_LABEL = {
+  'proxy-log': 'el propio proxy dice estar escuchando',
+  'known-port': 'estaba escuchando',
+  'env-port': 'apunta OXIDEGATE_PORT',
+  'env-url': 'apunta OXIDEGATE_LENS_URL',
+};
+
+/**
+ * Sondeo TOLERANTE de identidad, igual que `probeRequests` en
+ * bin/oxidegate-savings.mjs: nunca lanza, sólo dice si hay alguien
+ * escuchando y si ese alguien es OxideGate de verdad.
+ */
+async function probeRequests(baseUrl) {
+  try {
+    const res = await fetch(`${baseUrl}/requests`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!res.ok || !contentType.includes('json')) return { reachable: true, rows: null };
+    const body = await res.json().catch(() => null);
+    return { reachable: true, rows: Array.isArray(body) ? body : null };
+  } catch {
+    return { reachable: false, rows: null };
+  }
+}
+
+/** Igual que en bin/oxidegate-savings.mjs — ver ese header para el porqué de cada regla. */
+async function discoverEndpoint() {
+  const candidates = buildEndpointCandidates({
+    env: process.env,
+    loggedUrl: readProxyLogUrl({}),
+  });
+
+  const found = await chooseEndpoint({
+    candidates,
+    verify: async (baseUrl) => {
+      const { reachable, rows } = await probeRequests(baseUrl);
+      return { reachable, isOxidegate: Array.isArray(rows) };
+    },
+  });
+
+  const baseUrl = found.status === 'found' ? found.baseUrl : (candidates[0]?.baseUrl ?? `http://127.0.0.1:${DEFAULT_PORT}`);
+  return { ...found, baseUrl };
+}
+
+function announceOverride(found) {
+  if (!found.overrode) return;
+  process.stderr.write(
+    `oxidegate-lens: ${found.overrode.baseUrl} responde, pero no es OxideGate — ` +
+      `se ignora ${found.overrode.source === 'env-port' ? 'OXIDEGATE_PORT' : 'la URL configurada'}.\n` +
+      `  Usando ${found.baseUrl}, que es donde ${SOURCE_LABEL[found.source] ?? 'se encontró el proxy'}.\n`,
+  );
+}
+
+// ---------------------------------------------------------------------
+// Formato — números específicos de este informe, todos en la misma
+// convención `es-ES`: coma decimal, punto de miles. Coste, enteros y bytes
+// en español son propios de este informe — ver `formatBytesEs` para por qué
+// NO reutiliza `humanizeBytes` de lib/format.mjs pese a la lógica idéntica.
+// ---------------------------------------------------------------------
+
+/**
+ * `0.883174` -> `"0,8832 $"`. Nunca se llama con `null` — los callers ya lo
+ * comprueban. Coma decimal a propósito (defecto #2, issue #18): este informe
+ * está en español y ya agrupa los miles con punto (`formatInt` de abajo); un
+ * coste con punto decimal en la MISMA línea que un entero con punto de miles
+ * hace que el punto signifique dos cosas distintas según a qué número mires
+ * — un lector español lee "1.1582" como "mil ciento cincuenta y ocho", no
+ * como "uno coma mil ciento cincuenta y ocho". `toFixed` siempre produce un
+ * punto (no depende de locale), así que se sustituye a mano.
+ */
+function formatUsd(value) {
+  return `${value.toFixed(4).replace('.', ',')} $`;
+}
+
+/**
+ * `6839` -> `"6.839"` (separador de miles en punto, convención `es-ES`).
+ * `useGrouping: 'always'` a propósito: sin él, `Intl` con datos ICU
+ * reducidos (el Node de este proyecto no trae `full-icu`) no agrupa números
+ * de cuatro cifras por debajo de 10.000 (`6839` sale como `"6839"`), sólo a
+ * partir de cinco — comprobado en este mismo runtime, no asumido de la spec.
+ */
+function formatInt(value) {
+  return value.toLocaleString('es-ES', { useGrouping: 'always' });
+}
+
+/**
+ * Versión en español (coma decimal) de `humanizeBytes` de `lib/format.mjs`
+ * — MISMA lógica y MISMOS umbrales, deliberadamente NO importada de ahí:
+ * `lib/format.mjs` es compartida con `bin/oxidegate-savings.mjs`, cuyos
+ * tests fijan el punto decimal (`"31.3 kB"`) como su salida correcta y que
+ * este cambio tiene prohibido tocar. Duplicar 6 líneas es más barato que
+ * bifurcar el contrato de un módulo compartido por un solo dígito de
+ * puntuación (defecto #2, issue #18).
+ */
+function formatBytesEs(bytes) {
+  if (bytes === null || bytes === undefined || Number.isNaN(bytes)) return '-';
+  if (bytes < 1000) return `${bytes} B`;
+  const kb = Math.round((bytes / 1000) * 10) / 10;
+  if (kb < 1000) return `${kb.toFixed(1).replace('.', ',')} kB`;
+  const mb = Math.round((bytes / 1_000_000) * 10) / 10;
+  return `${mb.toFixed(1).replace('.', ',')} MB`;
+}
+
+/** Clave truncada legible. `null` — nunca inventa un string — se marca explícitamente. */
+function truncateKey(key, maxLen = 28) {
+  if (key === null) return '(clave desconocida)';
+  if (key.length <= maxLen) return key;
+  return `${key.slice(0, maxLen - 1)}…`;
+}
+
+function pad(value, width, align = 'left') {
+  const text = String(value);
+  if (text.length >= width) return text;
+  const filler = ' '.repeat(width - text.length);
+  return align === 'right' ? filler + text : text + filler;
+}
+
+/**
+ * Línea de un total. Semántica `sumOrUnknown`: un campo `null` se imprime
+ * como "desconocido", nunca como una suma parcial disfrazada de completa.
+ * `costText`, si se pasa, SUSTITUYE por completo la cifra de coste por
+ * defecto — usado por el bloque (b), cuyo coste no sigue la semántica
+ * `sumOrUnknown` normal (ver `unattributedCostText`, hallazgo 3).
+ */
+function formatTotalLine(label, totals, { saturated, costText } = {}) {
+  const satTag = saturated ? ' [cota inferior — registro saturado, ver aviso arriba]' : '';
+  const resolvedCostText = costText !== undefined ? costText : totals.cost === null ? 'desconocido' : formatUsd(totals.cost);
+  const parts = [
+    `coste=${resolvedCostText}`,
+    `turnos=${totals.requests === null ? 'desconocido' : formatInt(totals.requests)}`,
+    `entrada=${totals.inputTokens === null ? 'desconocido' : formatInt(totals.inputTokens)}`,
+    `cache_leída=${totals.cacheReadTokens === null ? 'desconocido' : formatInt(totals.cacheReadTokens)}`,
+    `salida=${totals.outputTokens === null ? 'desconocido' : formatInt(totals.outputTokens)}`,
+  ];
+  const filaWord = totals.count === 1 ? 'fila' : 'filas';
+  return `  total ${label} (${totals.count} ${filaWord}): ${parts.join('  ')}${satTag}\n`;
+}
+
+// ---------------------------------------------------------------------
+// (a) SESIONES
+// ---------------------------------------------------------------------
+function writeSessionsBlock(report) {
+  process.stdout.write('\nSESIONES (coste real, atribuible a una sesión de trabajo):\n');
+  if (report.sessions.length === 0) {
+    process.stdout.write('  no hay sesiones registradas en esta ventana.\n');
+    return;
+  }
+
+  process.stdout.write(
+    `  ${pad('CLAVE', 28)}  ${pad('TURNOS', 6, 'right')}  ${pad('COSTE', 12, 'right')}  ` +
+      `${pad('ENTRADA', 10, 'right')}  ${pad('CACHE_LEÍDA', 12, 'right')}  ${pad('SALIDA', 10, 'right')}\n`,
+  );
+  for (const row of report.sessions) {
+    process.stdout.write(
+      `  ${pad(truncateKey(row.key), 28)}  ` +
+        `${pad(row.requests === null ? '-' : formatInt(row.requests), 6, 'right')}  ` +
+        `${pad(row.costUsd === null ? 'desconocido' : formatUsd(row.costUsd), 12, 'right')}  ` +
+        `${pad(row.inputTokens === null ? '-' : formatInt(row.inputTokens), 10, 'right')}  ` +
+        `${pad(row.cacheReadTokens === null ? '-' : formatInt(row.cacheReadTokens), 12, 'right')}  ` +
+        `${pad(row.outputTokens === null ? '-' : formatInt(row.outputTokens), 10, 'right')}\n`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------
+// (b) NO ATRIBUIDO A UNA SESIÓN
+// ---------------------------------------------------------------------
+
+/**
+ * Coste de UNA fila del bloque (b) — hallazgo 3 (issue #18, revisión
+ * adversarial): la especificación anterior confundía "no atribuible a una
+ * sesión" con "gratis". Corregido:
+ *   - `null` (campo ausente)      -> "desconocido".
+ *   - `0` (el proxy no le puso precio) -> la MARCA, sin cifra: un `0`
+ *     impreso ahí se lee como "gratis" y miente (ver `unattributed` real:
+ *     400.919 tokens de entrada a coste 0, que costaron dinero de verdad).
+ *   - `> 0` (el proxy SÍ midió un coste) -> se imprime el IMPORTE. Lo que no
+ *     es atribuible es la SESIÓN, no el dinero — tirarlo es perder coste
+ *     real del informe.
+ */
+function unattributedRowCostText(costUsd) {
+  if (costUsd === null) return 'desconocido';
+  if (costUsd === 0) return 'no atribuible';
+  return formatUsd(costUsd);
+}
+
+/**
+ * Coste del TOTAL del bloque (b) — misma corrección que
+ * `unattributedRowCostText`, pero a nivel de grupo: sumar cifras conocidas
+ * que son `0` (sin precio) contaría "gratis" como dinero real, así que se
+ * excluyen de la suma. Si NINGUNA fila tiene un coste > 0 conocido, el total
+ * no tiene nada que sumar y se marca "no atribuible", igual que una fila
+ * individual. Si HAY una mezcla (algo conocido + algo sin precio), la suma
+ * de lo conocido se marca COTA INFERIOR — mismo lenguaje que `saturated` —
+ * porque descartar en silencio lo que no se pudo sumar sería tan deshonesto
+ * como el defecto original que perdía el dinero entero.
+ */
+function unattributedCostText(rows) {
+  if (rows.length === 0) return formatUsd(0);
+  let sum = 0;
+  let sawKnownPositive = false;
+  let sawUnpriced = false;
+  for (const row of rows) {
+    if (row.costUsd === null || row.costUsd === 0) {
+      sawUnpriced = true;
+      continue;
+    }
+    sum += row.costUsd;
+    sawKnownPositive = true;
+  }
+  if (!sawKnownPositive) return 'no atribuible';
+  return sawUnpriced
+    ? `${formatUsd(sum)} [cota inferior — hay filas sin precio (0 o desconocido), no incluidas en la suma]`
+    : formatUsd(sum);
+}
+
+function writeUnattributedBlock(report) {
+  // La explicación larga de qué son estos cubos y por qué su coste no es
+  // atribuible va AQUÍ, una sola vez (defecto #4, issue #18) — no repetida
+  // en cada fila. Misma disciplina de tabla que (a) para que ambos bloques
+  // se puedan comparar de un vistazo, que es justo lo que un lector quiere
+  // hacer con dos bloques de la misma forma de dato.
+  process.stdout.write(
+    '\nNO ATRIBUIDO A UNA SESIÓN (cubos por cliente/user-agent, is_session:false — su coste\n' +
+      'no es el coste de una sesión: si el proxy no pudo ponerle precio (0 o ausente), el hueco\n' +
+      'del coste lleva la marca, nunca una cifra falsa; si SÍ lo midió, se imprime el importe —\n' +
+      'lo que falta es la sesión, no el dinero. NUNCA rankeados junto a las sesiones de arriba):\n',
+  );
+  if (report.unattributed.length === 0) {
+    // Hallazgo 2 (issue #18, revisión adversarial): decir "no hay filas no
+    // atribuidas" cuando SÍ hay filas sin clasificar (ver bloque de abajo)
+    // es falso — is_session:false está vacío, pero eso no significa que no
+    // haya nada sin pinchar a una sesión.
+    if (report.unclassified.length > 0) {
+      process.stdout.write(
+        '  no hay filas con is_session:false en esta ventana (sí hay filas SIN CLASIFICAR, ver el bloque de abajo).\n',
+      );
+    } else {
+      process.stdout.write('  no hay filas no atribuidas en esta ventana.\n');
+    }
+    return;
+  }
+
+  process.stdout.write(
+    `  ${pad('CLAVE', 28)}  ${pad('TURNOS', 6, 'right')}  ${pad('COSTE', 12, 'right')}  ` +
+      `${pad('ENTRADA', 10, 'right')}  ${pad('CACHE_LEÍDA', 12, 'right')}  ${pad('SALIDA', 10, 'right')}\n`,
+  );
+  for (const row of report.unattributed) {
+    const costText = unattributedRowCostText(row.costUsd);
+    process.stdout.write(
+      `  ${pad(truncateKey(row.key), 28)}  ` +
+        `${pad(row.requests === null ? '-' : formatInt(row.requests), 6, 'right')}  ` +
+        `${pad(costText, 12, 'right')}  ` +
+        `${pad(row.inputTokens === null ? '-' : formatInt(row.inputTokens), 10, 'right')}  ` +
+        `${pad(row.cacheReadTokens === null ? '-' : formatInt(row.cacheReadTokens), 12, 'right')}  ` +
+        `${pad(row.outputTokens === null ? '-' : formatInt(row.outputTokens), 10, 'right')}\n`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------
+// (c) SIN CLASIFICAR — hallazgo 2, issue #18 (revisión adversarial)
+// ---------------------------------------------------------------------
+// `lib/session-report.mjs` documenta `unclassified` como "never dropped,
+// never guessed into either block above", pero antes de este arreglo nada
+// aquí lo leía: una fila con `is_session` ausente o no booleano no aparecía
+// en ningún bloque, y el bloque (b) llegaba a decir "no hay filas no
+// atribuidas" con una fila así delante. Este bloque cierra ese hueco. Se
+// muestra SÓLO cuando no está vacío (report.unclassified.length > 0, ver
+// main()) para no ensuciar el caso normal, que es no tener ninguna.
+//
+// El coste de estas filas NO lleva la marca "no atribuible" de (b): esa
+// marca es la conclusión de que el proxy dijo explícitamente `is_session:
+// false`. Aquí el proxy no dijo nada clasificable — es un dato tal cual,
+// ni sesión ni no-sesión confirmada — así que se imprime sin adornos, con
+// la misma disciplina `null` -> "desconocido" que (a).
+function writeUnclassifiedBlock(report) {
+  process.stdout.write(
+    '\nSIN CLASIFICAR (is_session llegó ausente o no booleano en estas filas — un proxy más\n' +
+      'nuevo, más viejo, o un dato corrupto; por eso NO se adivinan hacia sesiones ni hacia no\n' +
+      'atribuido, y su total es el suyo propio, aparte de esos dos):\n',
+  );
+
+  process.stdout.write(
+    `  ${pad('CLAVE', 28)}  ${pad('TURNOS', 6, 'right')}  ${pad('COSTE', 12, 'right')}  ` +
+      `${pad('ENTRADA', 10, 'right')}  ${pad('CACHE_LEÍDA', 12, 'right')}  ${pad('SALIDA', 10, 'right')}\n`,
+  );
+  for (const row of report.unclassified) {
+    process.stdout.write(
+      `  ${pad(truncateKey(row.key), 28)}  ` +
+        `${pad(row.requests === null ? '-' : formatInt(row.requests), 6, 'right')}  ` +
+        `${pad(row.costUsd === null ? 'desconocido' : formatUsd(row.costUsd), 12, 'right')}  ` +
+        `${pad(row.inputTokens === null ? '-' : formatInt(row.inputTokens), 10, 'right')}  ` +
+        `${pad(row.cacheReadTokens === null ? '-' : formatInt(row.cacheReadTokens), 12, 'right')}  ` +
+        `${pad(row.outputTokens === null ? '-' : formatInt(row.outputTokens), 10, 'right')}\n`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------
+// (d) EL PEAJE FIJO POR TURNO
+// ---------------------------------------------------------------------
+function formatTollMember(name, member) {
+  if (member.status === 'unmeasured') return `      ${name}: no medido\n`;
+  if (member.product === null) {
+    return (
+      `      ${name}: ${formatInt(member.bytes)} B, visto en ${formatInt(member.seenIn)} turno(s) — ` +
+      'turnos totales desconocidos, no se calcula el repetido\n'
+    );
+  }
+  return (
+    `      ${name}: ${formatInt(member.bytes)} B × ${formatInt(member.seenIn)} turnos ≈ ` +
+    `${formatBytesEs(member.product)} repetidos\n`
+  );
+}
+
+/** Una fila del peaje "dice algo" si CUALQUIERA de sus tres miembros está medido. */
+function tollRowHasMeasuredMember(row) {
+  return (
+    row.members.hooks.status === 'known' ||
+    row.members.instructions.status === 'known' ||
+    row.members.skills.status === 'known'
+  );
+}
+
+/**
+ * (d) es la tesis del N² medida — la razón de ser de esta lente (defecto
+ * #3, issue #18). Con muchas filas sin nada medido, listarlas una a una
+ * entierra las pocas que sí dicen algo bajo "no medido" repetido: se
+ * resumen en UNA línea con el recuento exacto, nunca se ocultan. Entre las
+ * que sí miden algo, sesiones primero — son el sujeto real del informe.
+ */
+function writeFixedTollBlock(report) {
+  process.stdout.write(
+    '\nEL PEAJE FIJO POR TURNO (fixed_toll — un payload que se repite en cada turno donde estuvo):\n',
+  );
+  if (report.fixedToll.length === 0) {
+    process.stdout.write('  no hay filas en esta ventana: nada que medir de peaje fijo.\n');
+    return;
+  }
+
+  const measured = report.fixedToll.filter(tollRowHasMeasuredMember);
+  const unmeasured = report.fixedToll.filter((row) => !tollRowHasMeasuredMember(row));
+
+  if (measured.length === 0) {
+    const filaWord = report.fixedToll.length === 1 ? 'fila' : 'filas';
+    process.stdout.write(
+      `  ninguna de las ${formatInt(report.fixedToll.length)} ${filaWord} mide nada en este peaje: ` +
+        'hooks, instructions y skills están "no medido" en todas.\n',
+    );
+    return;
+  }
+
+  const sessionRows = measured.filter((row) => row.isSession === true);
+  const otherMeasuredRows = measured.filter((row) => row.isSession !== true);
+  for (const row of [...sessionRows, ...otherMeasuredRows]) {
+    const claseTexto = row.isSession === true ? 'sesión' : row.isSession === false ? 'no-sesión' : 'sin clasificar';
+    process.stdout.write(`  - ${truncateKey(row.key)} (${claseTexto}):\n`);
+    process.stdout.write(formatTollMember('hooks', row.members.hooks));
+    process.stdout.write(formatTollMember('instructions', row.members.instructions));
+    process.stdout.write(formatTollMember('skills', row.members.skills));
+  }
+
+  if (unmeasured.length > 0) {
+    const filaWord = unmeasured.length === 1 ? 'fila' : 'filas';
+    process.stdout.write(
+      `  + ${formatInt(unmeasured.length)} ${filaWord} más sin ningún miembro medido ` +
+        '(hooks/instructions/skills "no medido" en todas) — no se listan una a una para no ahogar\n' +
+        '    las de arriba, que sí miden algo.\n',
+    );
+  }
+}
+
+// ---------------------------------------------------------------------
+// (e) saturated
+// ---------------------------------------------------------------------
+function writeSaturatedNotice(report) {
+  if (!report.saturated) return;
+  process.stdout.write(
+    '\naviso: este registro está SATURADO — el proxy dejó de admitir claves nuevas cuando se llenó.\n' +
+      'Las filas de arriba son una COTA INFERIOR: hay sesiones y/o cubos que no llegaron a tener fila\n' +
+      'propia. Ningún total de abajo se puede leer como una suma completa.\n',
+  );
+}
+
+const HELP = `oxidegate-sessions — qué costó cada SESIÓN, no cada petición
+
+USO:
+    oxidegate-sessions                  El reporte completo
+    oxidegate-sessions --since FECHA    Sólo la ventana desde FECHA
+    oxidegate-sessions --help           Muestra esta ayuda
+
+--since:
+    Mismo contrato que /stats: una fecha YYYY-MM-DD o un número de días
+    como "7d". Se manda tal cual al proxy, que lo valida — si no lo
+    entiende, este comando imprime el mensaje que da el proxy y sale con
+    código distinto de 0. Sin --since, la ventana es todo lo que el
+    proxy retenga (no hay forma de saber cuánto es eso desde aquí).
+
+QUÉ RESPONDE:
+    Cuánto costó cada sesión de trabajo — no cada petición ni cada
+    modelo. Cuatro bloques independientes, nunca un solo veredicto:
+    sesiones (coste real), lo no atribuido a ninguna sesión (cubos por
+    cliente, nunca rankeados junto a las sesiones), el peaje fijo por
+    turno (hooks/instructions/skills repetidos turno a turno), y un
+    aviso si el registro del proxy se saturó.
+
+QUÉ NO PUEDE DECIR:
+    No mide el crecimiento turno a turno dentro de una sesión — eso
+    necesita /requests, no /sessions (ver issue #31). Tampoco decide si
+    un coste "no atribuible" es un problema: sólo lo separa y lo marca.
+
+DÓNDE MIRA:
+    Igual que oxidegate-savings: OXIDEGATE_LENS_URL, si no
+    OXIDEGATE_PORT, si no ~/.config/oxidegate/proxy.log, si no los
+    puertos habituales (8080, 8899). Comprueba siempre que quien
+    contesta es OxideGate de verdad antes de creerle.
+
+VER TAMBIÉN:
+    oxidegate-savings    bytes por servidor MCP en cada petición
+`;
+
+/**
+ * Lee `--since`. Tres estados, no dos (hallazgo 4, issue #18 adversarial
+ * review):
+ *   - `{ status: 'absent' }` — no se pasó `--since`: comportamiento normal,
+ *     la ventana es todo lo que el proxy retiene.
+ *   - `{ status: 'ok', value }` — valor presente, incluida la cadena vacía
+ *     (`--since ''`) o un valor con espacios: eso lo valida EL PROXY, nunca
+ *     este binario (ver cabecera del módulo).
+ *   - `{ status: 'missing-value' }` — `--since` es el último argumento, o el
+ *     siguiente argumento empieza por `--` (con toda seguridad un olvido, no
+ *     una ventana: no hay fecha ni cuenta de días real que empiece así).
+ *     ANTES, este caso devolvía `null`, indistinguible de "no se pasó
+ *     --since": el usuario escribía la flag y se ignoraba en silencio.
+ */
+function readSinceArg(args) {
+  const withEquals = args.find((a) => a.startsWith('--since='));
+  if (withEquals) return { status: 'ok', value: withEquals.slice('--since='.length) };
+  const idx = args.indexOf('--since');
+  if (idx === -1) return { status: 'absent' };
+  const next = args[idx + 1];
+  if (typeof next !== 'string' || next.startsWith('--')) return { status: 'missing-value' };
+  return { status: 'ok', value: next };
+}
+
+/**
+ * Trae `/sessions`, tolerante: NUNCA lanza. Cada rama de fallo se cuenta a
+ * `main()` con un `status` propio, en vez de un `throw` genérico, porque
+ * cada una tiene un mensaje y una acción distintos — igual que
+ * `readProxyVersion` en lib/proxy-version.mjs.
+ */
+async function fetchSessions(baseUrl, since) {
+  const url = new URL('/sessions', baseUrl);
+  if (since !== null) url.searchParams.set('since', since);
+
+  let res;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  } catch (err) {
+    return { status: 'unreachable', message: err?.message ?? 'error de red' };
+  }
+
+  if (res.status === 400) {
+    const text = await res.text().catch(() => '');
+    return { status: 'bad-since', message: text.trim() };
+  }
+  if (res.status === 404) {
+    return { status: 'not-found' };
+  }
+  if (!res.ok) {
+    return { status: 'http-error', code: res.status };
+  }
+
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('json')) {
+    return { status: 'not-json' };
+  }
+
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    return { status: 'unparseable' };
+  }
+  return { status: 'ok', body };
+}
+
+const NO_PUBLICA_MSG = 'oxidegate-lens: tu OxideGate no publica /sessions, actualiza.\n';
+
+async function main() {
+  // Cortar la salida con `| head` cierra stdout antes de terminar de
+  // escribir — ver bin/oxidegate-mcp.mjs para el mismo guardia.
+  process.stdout.on('error', (error) => {
+    if (error?.code === 'EPIPE') process.exit(0);
+    throw error;
+  });
+
+  const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    process.stdout.write(HELP);
+    return;
+  }
+
+  const sinceArg = readSinceArg(args);
+  if (sinceArg.status === 'missing-value') {
+    process.stderr.write(
+      'oxidegate-lens: --since necesita un valor: una fecha YYYY-MM-DD o un número de días como "7d".\n',
+    );
+    process.exit(1);
+  }
+  const since = sinceArg.status === 'ok' ? sinceArg.value : null;
+
+  const found = await discoverEndpoint();
+  const baseUrl = found.baseUrl;
+  announceOverride(found);
+
+  // La puerta de capacidades: tri-estado, ver header del módulo.
+  const version = await readProxyVersion({ baseUrl, timeoutMs: FETCH_TIMEOUT_MS });
+  const publishes = publishesEndpoint(version, '/sessions');
+
+  if (publishes === false) {
+    process.stderr.write(NO_PUBLICA_MSG);
+    process.exit(1);
+  }
+
+  const fetched = await fetchSessions(baseUrl, since);
+
+  if (fetched.status === 'not-found') {
+    // `publishes` era `true` o `null` — en cualquier caso, el proxy acaba de
+    // responder 404 de verdad. Es la MISMA frase que la rama `false` de
+    // arriba: para quien lee el mensaje, la causa no importa, la acción sí.
+    process.stderr.write(NO_PUBLICA_MSG);
+    process.exit(1);
+  }
+  if (fetched.status === 'bad-since') {
+    process.stderr.write(`oxidegate-lens: ${fetched.message || 'el valor de --since no es válido'}\n`);
+    process.exit(1);
+  }
+  if (fetched.status === 'unreachable') {
+    process.stderr.write(`oxidegate-lens: no se pudo conectar con ${baseUrl}: ${fetched.message}\n`);
+    process.exit(1);
+  }
+  if (fetched.status === 'not-json' || fetched.status === 'unparseable') {
+    process.stderr.write(`oxidegate-lens: ${baseUrl} respondió, pero /sessions no devolvió JSON entendible.\n`);
+    process.exit(1);
+  }
+  if (fetched.status === 'http-error') {
+    process.stderr.write(`oxidegate-lens: GET /sessions devolvió ${fetched.code}.\n`);
+    process.exit(1);
+  }
+
+  const report = buildSessionReport(fetched.body);
+  if (report.status !== 'known') {
+    process.stderr.write('oxidegate-lens: /sessions respondió, pero con una forma que esta versión no reconoce.\n');
+    process.exit(1);
+  }
+
+  process.stdout.write(
+    `fuente: ${baseUrl}/sessions\n` +
+      `ventana: ${since ? `desde ${since}` : 'todo lo que el proxy retiene (sin --since)'}\n`,
+  );
+
+  writeSessionsBlock(report);
+  writeUnattributedBlock(report);
+  // Hallazgo 2: el bloque (c) sólo sale cuando hay algo que mostrar — no
+  // ensucia el caso normal (todas las filas clasificadas).
+  if (report.unclassified.length > 0) writeUnclassifiedBlock(report);
+  writeFixedTollBlock(report);
+  writeSaturatedNotice(report);
+
+  process.stdout.write('\nTOTALES:\n');
+  process.stdout.write(
+    formatTotalLine('sesiones', report.totals.sessions, { saturated: report.saturated }),
+  );
+  process.stdout.write(
+    formatTotalLine('no atribuido', report.totals.unattributed, {
+      saturated: report.saturated,
+      costText: unattributedCostText(report.unattributed),
+    }),
+  );
+  // Mismo criterio que el bloque: el total de "sin clasificar" sólo aparece
+  // si hay algo sin clasificar — es un grupo aparte, nunca sumado a los de
+  // arriba (ver cabecera de lib/session-report.mjs).
+  if (report.unclassified.length > 0) {
+    process.stdout.write(formatTotalLine('sin clasificar', report.totals.unclassified, { saturated: report.saturated }));
+  }
+
+  process.stdout.write(
+    '\nnota: no mide crecimiento turno a turno dentro de una sesión — eso necesita /requests,\n' +
+      'no /sessions (issue #31). "no atribuible" no es un juicio: sólo separa lo que el proxy\n' +
+      'no pudo pinchar en una sesión concreta.\n',
+  );
+}
+
+try {
+  await main();
+} catch (err) {
+  process.stderr.write(`oxidegate-lens: ${err?.message ?? 'unknown error'}\n`);
+  process.exit(1);
+}
