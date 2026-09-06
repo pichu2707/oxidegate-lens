@@ -91,6 +91,53 @@ test('publishesEndpoint null (proxy pre-contrato) + 404 real en /sessions -> mis
   }
 });
 
+test('hallazgo 1: publishesEndpoint null (proxy pre-contrato, /version 404) PERO /sessions responde 200 con datos reales -> SE RENDERIZA la tabla, jamás se colapsa null en false', async () => {
+  // Sin pasar `version` -> /version 404 -> readProxyVersion 'pre-contract' -> publishesEndpoint null.
+  // CON `sessions` -> /sessions 200 real. El único contraejemplo que demuestra
+  // que `null` no se trata como `false`: si se colapsara, esta petición jamás
+  // se haría y el informe completo (con su fila real) nunca aparecería.
+  const mock = await startMockOxideGate({
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL] },
+  });
+  try {
+    const { stdout, code } = await runSessionsCli({ baseUrl: mock.url });
+    assert.equal(code, 0);
+    assert.ok(stdout.includes('SESIONES'));
+    assert.ok(stdout.includes('ses_f87dc264'));
+    assert.ok(stdout.includes('TOTALES'));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('hallazgo 1: publishesEndpoint null por /version inalcanzable (fail de red) también deja pasar la petición real a /sessions', async () => {
+  const mock = await startMockOxideGate({
+    version: 'fail',
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL] },
+  });
+  try {
+    const { stdout, code } = await runSessionsCli({ baseUrl: mock.url });
+    assert.equal(code, 0);
+    assert.ok(stdout.includes('SESIONES'));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('hallazgo 1: publishesEndpoint null por forma inesperada de /version también deja pasar la petición real a /sessions', async () => {
+  const mock = await startMockOxideGate({
+    version: { contract: 'no-es-un-numero' }, // forma inválida -> unknown -> null
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL] },
+  });
+  try {
+    const { stdout, code } = await runSessionsCli({ baseUrl: mock.url });
+    assert.equal(code, 0);
+    assert.ok(stdout.includes('SESIONES'));
+  } finally {
+    await mock.close();
+  }
+});
+
 test('publishesEndpoint true: se pide /sessions y se renderiza el informe completo', async () => {
   const mock = await startMockOxideGate({
     version: CONTRATO_CON_SESSIONS,
@@ -498,3 +545,4 @@ test('--since con fecha YYYY-MM-DD también es válido para el mock (mismo contr
     await mock.close();
   }
 });
+
