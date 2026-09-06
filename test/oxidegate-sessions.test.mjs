@@ -688,3 +688,55 @@ test('--since con fecha YYYY-MM-DD también es válido para el mock (mismo contr
   }
 });
 
+// ------------------------------------------------------------- hallazgo 4
+
+test('hallazgo 4: --since como último argumento, sin valor, es un error de uso — no se traga en silencio', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL] },
+  });
+  try {
+    const { stdout, stderr, code } = await runSessionsCli({ baseUrl: mock.url, args: ['--since'] });
+    assert.notEqual(code, 0);
+    assert.ok(stderr.includes('--since'));
+    assert.ok(stderr.includes('YYYY-MM-DD'));
+    assert.ok(!stdout.includes('SESIONES'), 'no debe renderizar el informe con el --since ignorado');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('hallazgo 4: --since seguido de otra flag ("--since --algo-inventado") no se traga como valor, error de uso', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL] },
+  });
+  try {
+    const { stdout, stderr, code } = await runSessionsCli({
+      baseUrl: mock.url,
+      args: ['--since', '--algo-inventado'],
+    });
+    assert.notEqual(code, 0);
+    assert.ok(stderr.includes('--since'));
+    assert.ok(!stdout.includes('SESIONES'));
+  } finally {
+    await mock.close();
+  }
+});
+
+test("hallazgo 4: --since '' (cadena vacía explícita) sigue funcionando — el proxy la valida, no este comando", async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [] },
+  });
+  try {
+    const { stderr, code } = await runSessionsCli({ baseUrl: mock.url, args: ['--since', ''] });
+    assert.notEqual(code, 0);
+    // el proxy responde 400 (since='' no es válido), pero eso lo decide EL
+    // PROXY: la validación no ocurre en este binario.
+    assert.ok(stderr.includes('since='));
+  } finally {
+    await mock.close();
+  }
+});
+

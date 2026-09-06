@@ -520,12 +520,28 @@ VER TAMBIÉN:
     oxidegate-savings    bytes por servidor MCP en cada petición
 `;
 
+/**
+ * Lee `--since`. Tres estados, no dos (hallazgo 4, issue #18 adversarial
+ * review):
+ *   - `{ status: 'absent' }` — no se pasó `--since`: comportamiento normal,
+ *     la ventana es todo lo que el proxy retiene.
+ *   - `{ status: 'ok', value }` — valor presente, incluida la cadena vacía
+ *     (`--since ''`) o un valor con espacios: eso lo valida EL PROXY, nunca
+ *     este binario (ver cabecera del módulo).
+ *   - `{ status: 'missing-value' }` — `--since` es el último argumento, o el
+ *     siguiente argumento empieza por `--` (con toda seguridad un olvido, no
+ *     una ventana: no hay fecha ni cuenta de días real que empiece así).
+ *     ANTES, este caso devolvía `null`, indistinguible de "no se pasó
+ *     --since": el usuario escribía la flag y se ignoraba en silencio.
+ */
 function readSinceArg(args) {
   const withEquals = args.find((a) => a.startsWith('--since='));
-  if (withEquals) return withEquals.slice('--since='.length);
+  if (withEquals) return { status: 'ok', value: withEquals.slice('--since='.length) };
   const idx = args.indexOf('--since');
-  if (idx !== -1 && typeof args[idx + 1] === 'string') return args[idx + 1];
-  return null;
+  if (idx === -1) return { status: 'absent' };
+  const next = args[idx + 1];
+  if (typeof next !== 'string' || next.startsWith('--')) return { status: 'missing-value' };
+  return { status: 'ok', value: next };
 }
 
 /**
@@ -586,7 +602,14 @@ async function main() {
     return;
   }
 
-  const since = readSinceArg(args);
+  const sinceArg = readSinceArg(args);
+  if (sinceArg.status === 'missing-value') {
+    process.stderr.write(
+      'oxidegate-lens: --since necesita un valor: una fecha YYYY-MM-DD o un número de días como "7d".\n',
+    );
+    process.exit(1);
+  }
+  const since = sinceArg.status === 'ok' ? sinceArg.value : null;
 
   const found = await discoverEndpoint();
   const baseUrl = found.baseUrl;
