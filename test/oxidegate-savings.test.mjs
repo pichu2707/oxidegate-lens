@@ -1383,3 +1383,67 @@ test('--doctor: un proxy anterior a 0.3.0 (sin /health) se declara ROTO, y dice 
   assert.match(stdout, /SILENCIO/i, 'la consecuencia es lo que lo hacía indiagnosticable');
   assert.match(stdout, /BROKEN/);
 });
+
+// =======================================================================
+// --doctor lee GET /version (issue #30).
+//
+// OxideGate publica /version, un endpoint de CAPACIDADES, y hasta ahora la
+// lens nunca lo consultaba — no podía distinguir "el proxy no soporta esto"
+// de "aquí no había dato". Estos tests fijan el cableado END TO END: el
+// binario tiene que sondear /version de verdad y pasar la observación al
+// doctor, no solo la lógica interna de lib/mcp-doctor.mjs (ya cubierta en
+// test/mcp-doctor.test.mjs).
+// =======================================================================
+
+test('--doctor: el proxy publica su contrato en /version -> lo reporta con versión, contrato y cuántos endpoints/campos', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({ missing: true });
+  const mock = await startMockOxideGate({
+    requests: requestsWindow({ count: 3, spanMs: 60_000 }),
+    stats: [],
+    version: {
+      contract: 1,
+      endpoints: ['/health', '/stats', '/sessions', '/requests', '/mcp', '/history'],
+      fields: ['tool_names', 'session'],
+      oxidegate: '0.13.0',
+    },
+  });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+    args: ['--doctor'],
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0);
+  assert.match(stdout, /0\.13\.0/, 'debe nombrar la versión que declaró /version');
+  assert.match(stdout, /contrato 1/, 'debe nombrar el número de contrato');
+});
+
+test('--doctor: un proxy sin /version (404) avisa que es anterior al contrato, y NO lo trata como roto', async () => {
+  const claude = await knownZeroClaude();
+  const snap = await makeFakeSnapshot({ missing: true });
+  // Sin `version` configurado, el mock responde 404 a /version — el mismo
+  // comportamiento que un OxideGate real anterior a la introducción del
+  // endpoint.
+  const mock = await startMockOxideGate({ requests: requestsWindow({ count: 3, spanMs: 60_000 }), stats: [] });
+
+  const { stdout, code } = await runSavingsCli({
+    baseUrl: mock.url,
+    claudePath: claude.path,
+    homePath: snap.homePath,
+    args: ['--doctor'],
+  });
+  await mock.close();
+  await claude.cleanup();
+  await snap.cleanup();
+
+  assert.equal(code, 0, 'pre-contrato es un aviso, no un eslabón roto');
+  assert.match(stdout, /anterior a \/version/i);
+  assert.match(stdout, /actualiza/i, 'debe decir qué hacer, no solo el síntoma');
+  assert.doesNotMatch(stdout, /BROKEN/);
+});
