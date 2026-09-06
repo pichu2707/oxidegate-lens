@@ -15,8 +15,9 @@ muestra los hechos que sí puede medir, por separado, sin mezclarlos.
 brew install pichu2707/tap/oxidegate-lens
 ```
 
-Instala un comando: **`oxidegate-savings`** (el reporte). Cero dependencias:
-solo necesita Node.
+Instala dos comandos: **`oxidegate-savings`** (bytes por servidor MCP en cada
+petición) y **`oxidegate-sessions`** (coste por sesión — ver más abajo). Cero
+dependencias: solo necesita Node.
 
 ### Si usas OpenCode, instálalo por npm
 
@@ -326,6 +327,88 @@ Ignorarlas lleva a conclusiones falsas:
   en la causa de por qué falta un servidor en el cable (puede estar retenido o
   puede estar todavía conectando — el reporte nombra ambas posibilidades y no
   elige, porque una sola petición no permite elegir).
+
+---
+
+## `oxidegate-sessions` — coste por sesión, no bytes por servidor
+
+`oxidegate-savings` responde *¿qué pesa esta petición?* Este segundo comando
+responde una pregunta distinta, en otra moneda: **¿cuánto costó ESTA sesión
+de trabajo?** Lee `GET /sessions` de OxideGate — una agregación por
+`(source, key)` — y nunca mezcla sus bloques en un solo veredicto.
+
+```sh
+oxidegate-sessions
+oxidegate-sessions --since 7d
+oxidegate-sessions --since 2026-01-01
+```
+
+Imprime **cuatro bloques independientes**:
+
+1. **SESIONES** — filas con `is_session: true`, ordenadas por coste
+   descendente. Es el sujeto real del informe.
+2. **NO ATRIBUIDO A UNA SESIÓN** — filas con `is_session: false`: cubos por
+   cliente/user-agent, no sesiones. **Nunca se rankean junto a las
+   sesiones.** Sus tokens son reales y se muestran; su coste se marca "no
+   atribuible" en la misma línea, nunca como un `0,00 $` desnudo — medido
+   contra un proxy real, la fila `unattributed` puede concentrar el 34% de
+   los tokens de entrada de la ventana con `cost_usd: 0`, y un reporte que
+   lo imprimiera como "gratis" estaría mintiendo.
+3. **EL PEAJE FIJO POR TURNO** — `fixed_toll.{hooks,instructions,skills}`:
+   un payload fijo (por ejemplo, el system-prompt de una skill) que vuelve a
+   viajar en cada turno donde estuvo presente. Es la razón de ser de este
+   comando: la tesis del N² **medida**, no argumentada — `6.839 B × 25
+   turnos ≈ 171 kB repetidos`. Un miembro `null` se imprime "no medido",
+   **jamás `0 B`**.
+4. **`saturated`** — si el registro del proxy se saturó, las filas de arriba
+   son una **cota inferior**: faltan claves que dejó de admitir. La marca va
+   pegada a los totales que invalida, no en una nota al pie.
+
+### La regla que rompe la intuición
+
+**`cost_usd === 0` NO implica `is_session === false`.** Un modelo sin precio
+da una sesión real con coste real `0` — y este comando la imprime como una
+sesión normal, con su `0,0000 $`, sin marcarla "no atribuible". La etiqueta
+de no-atribuible sale sólo de `is_session`/`source`, nunca de que el coste
+dé cero. Confundir las dos cosas fue, medido contra un proxy real, el error
+más caro que este informe podía cometer: la fila que más tokens consume
+puede ser exactamente la que parece "gratis" si sólo se mira el coste.
+
+### La puerta de capacidades
+
+Antes de pedir nada, este comando pregunta `GET /version` (issue #30) si el
+proxy publica `/sessions`. Es tri-estado, y el estado del medio importa:
+
+- **Sí lo publica** → adelante.
+- **Declaró su contrato SIN `/sessions`** → dice *"tu OxideGate no publica
+  /sessions, actualiza"* y **no imprime ninguna tabla**, ni vacía.
+- **No se pudo preguntar** (proxy sin `/version`, inalcanzable, timeout) →
+  esto **no es lo mismo** que "no lo publica": se intenta la petición real
+  igualmente, y sólo si el 404 la confirma se muestra el mismo aviso.
+
+### `--since`
+
+Mismo contrato que `/stats`: una fecha `YYYY-MM-DD` o un número de días
+(`7d`). Se manda tal cual al proxy, que lo valida — un valor que no entiende
+devuelve **400**, y este comando imprime el mensaje del propio proxy
+(ya viene en español) tal cual, y sale con código distinto de 0. Sin
+`--since`, la cabecera dice que la ventana es todo lo que el proxy retenga
+— este comando no sabe cuánto es eso, y no lo inventa.
+
+### Qué NO puede decir
+
+- **No mide el crecimiento turno a turno dentro de una sesión.** `/sessions`
+  devuelve un agregado por `(source, key)` — `requests` ahí es un contador,
+  no una serie. Esa curva se construye cruzando `/requests` por
+  `session.key`, que es otra fuente y otro modelo de confianza (issue #31).
+- **No decide qué proxy tienes.** Con persistencia activada en OxideGate
+  (`src/config.rs`), `/sessions` sí tiene ventana y sí sobrevive a un
+  reinicio; con la persistencia desactivada, la agregación es sólo desde que
+  arrancó el proceso. Este comando no puede saber cuál de las dos tienes —
+  sólo puede pedirte `--since` y mostrar lo que el proxy le devuelva.
+- **"no atribuible" no es un juicio de valor.** Sólo separa lo que el proxy
+  no pudo pinchar en una sesión concreta; no dice si ese gasto está bien o
+  mal gastado.
 
 ---
 

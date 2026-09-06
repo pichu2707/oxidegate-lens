@@ -12,7 +12,8 @@
   },
   "bin": {
     "oxidegate-savings": "bin/oxidegate-savings.mjs",
-    "oxidegate-mcp": "bin/oxidegate-mcp.mjs"
+    "oxidegate-mcp": "bin/oxidegate-mcp.mjs",
+    "oxidegate-sessions": "bin/oxidegate-sessions.mjs"
   },
   "files": [
     "bin",
