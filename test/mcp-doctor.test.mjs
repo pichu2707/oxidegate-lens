@@ -282,3 +282,45 @@ test('version ausente por completo (observación no recogida) -> unknown, no ok 
 
   assert.equal(check(result, 'version').status, 'unknown');
 });
+
+// -----------------------------------------------------------------------
+// `checkVersion` correlacionada con la IDENTIDAD del puerto.
+//
+// `checkHealth` y `checkTraffic` ya comprueban `isOxidegate` antes de opinar
+// sobre lo que devolvió la ruta; `checkVersion` no lo hacía. El agujero
+// concreto: un intruso en el puerto (WordPress, Apache, cualquier cosa) que
+// devuelve 404 en /version produce `{status:'known', reason:'pre-contract'}`
+// — correcto en aislamiento, pero `checkVersion` lo traducía a "tu OxideGate
+// es anterior a /version", una afirmación específica y FALSA sobre un
+// servicio que no es OxideGate. Estos tests fijan que la identidad manda.
+// -----------------------------------------------------------------------
+
+test('intruso en el puerto + version pre-contract -> unknown, NUNCA warn de "actualiza OxideGate"', () => {
+  const result = diagnose({ ...sano, isOxidegate: false, healthCode: 404, requestCount: 0, version: { status: 'known', reason: 'pre-contract' } });
+
+  const v = check(result, 'version');
+  assert.equal(v.status, 'unknown', 'sin identidad confirmada, /version no dice nada sobre OxideGate');
+  assert.doesNotMatch(`${v.title} ${v.detail}`, /anterior a \/version/i, 'no puede afirmar una versión de OxideGate sobre algo que no es OxideGate');
+});
+
+test('intruso en el puerto + version con forma de contrato válida -> unknown, NUNCA ok', () => {
+  // Un intruso que por casualidad sirva un JSON con la forma correcta tampoco
+  // se puede validar: la forma no es identidad.
+  const result = diagnose({
+    ...sano,
+    isOxidegate: false,
+    healthCode: 404,
+    requestCount: 0,
+    version: { status: 'known', contract: 1, endpoints: ['/health'], fields: [], oxidegate: '0.13.0' },
+  });
+
+  const v = check(result, 'version');
+  assert.equal(v.status, 'unknown');
+  assert.notEqual(v.status, 'ok');
+});
+
+test('proxy inalcanzable -> version es unknown, no se pudo sondear nada', () => {
+  const result = diagnose({ ...sano, reachable: false, isOxidegate: false, healthCode: null, requestCount: null });
+
+  assert.equal(check(result, 'version').status, 'unknown');
+});
