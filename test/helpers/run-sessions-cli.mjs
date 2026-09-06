@@ -74,25 +74,22 @@ export function assertNoFabricatedZeroBytes(assert, stdout) {
 }
 
 /**
- * Guards Rule 2 (issue #18): a row whose cost is not attributable must never
- * print a bare `0.0000 $` — the "no atribuible" marker has to be in the SAME
- * line as the figure, never a separate paragraph a reader could miss.
- *
- * A `(0 filas)` total is EXEMPT on purpose: an empty group's total is a real
- * `0` because there was nothing to sum, not because a real cost got hidden
- * — a different fact from an unattributable bucket's cost, and marking it
- * "no atribuible" would itself be a fabrication this suite would then have
- * to guard against.
+ * Guards Rule 2 (issue #18) — versión estricta: el hueco del coste de una
+ * fila (o total) marcada "no atribuible" NO lleva NINGÚN número, ni `0.0000
+ * $` ni `0,0000 $` ni ninguna otra cifra — sólo la marca. Imprimir la marca
+ * JUNTO a una cifra (el bug original) es tan fabricado como omitir la marca:
+ * el dato numérico gana en la cabeza del lector aunque la prosa diga lo
+ * contrario. Por eso esta función no busca "0.0000 $ sin marca" (eso ya
+ * dejaría pasar "0.0000 $ (no atribuible)"), busca CUALQUIER cifra de coste
+ * en una línea que ya lleva la marca.
  */
-export function assertNoUnmarkedZeroCost(assert, stdout) {
+export function assertNoFabricatedZeroCost(assert, stdout) {
   const lines = stdout.split('\n');
   for (const line of lines) {
-    if (line.includes('(0 filas)')) continue;
-    if (/\b0\.0000 \$/.test(line)) {
-      assert.ok(
-        line.includes('no atribuible'),
-        `un coste 0.0000 $ debe llevar "no atribuible" en la MISMA línea: ${line}`,
-      );
-    }
+    if (!line.includes('no atribuible')) continue;
+    assert.ok(
+      !/\d[.,]\d+\s?\$/.test(line),
+      `una línea "no atribuible" no debe llevar ninguna cifra de coste en el hueco del coste, sólo la marca: ${line}`,
+    );
   }
 }

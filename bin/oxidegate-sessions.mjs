@@ -73,7 +73,6 @@
 // proxy still retains; this lens has no idea what that retention window is,
 // and does not pretend to.
 
-import { humanizeBytes } from '../lib/format.mjs';
 import { buildSessionReport } from '../lib/session-report.mjs';
 import { readProxyVersion, publishesEndpoint } from '../lib/proxy-version.mjs';
 import { buildEndpointCandidates, chooseEndpoint, readProxyLogUrl } from '../lib/mcp-endpoint.mjs';
@@ -138,14 +137,24 @@ function announceOverride(found) {
 }
 
 // ---------------------------------------------------------------------
-// Formato — números específicos de este informe. `humanizeBytes` viene de
-// lib/format.mjs (compartido con oxidegate-savings); coste y enteros con
-// separador de miles son propios de este informe, que no existían allí.
+// Formato — números específicos de este informe, todos en la misma
+// convención `es-ES`: coma decimal, punto de miles. Coste, enteros y bytes
+// en español son propios de este informe — ver `formatBytesEs` para por qué
+// NO reutiliza `humanizeBytes` de lib/format.mjs pese a la lógica idéntica.
 // ---------------------------------------------------------------------
 
-/** `0.883174` -> `"0.8832 $"`. Nunca se llama con `null` — los callers ya lo comprueban. */
+/**
+ * `0.883174` -> `"0,8832 $"`. Nunca se llama con `null` — los callers ya lo
+ * comprueban. Coma decimal a propósito (defecto #2, issue #18): este informe
+ * está en español y ya agrupa los miles con punto (`formatInt` de abajo); un
+ * coste con punto decimal en la MISMA línea que un entero con punto de miles
+ * hace que el punto signifique dos cosas distintas según a qué número mires
+ * — un lector español lee "1.1582" como "mil ciento cincuenta y ocho", no
+ * como "uno coma mil ciento cincuenta y ocho". `toFixed` siempre produce un
+ * punto (no depende de locale), así que se sustituye a mano.
+ */
 function formatUsd(value) {
-  return `${value.toFixed(4)} $`;
+  return `${value.toFixed(4).replace('.', ',')} $`;
 }
 
 /**
@@ -157,6 +166,24 @@ function formatUsd(value) {
  */
 function formatInt(value) {
   return value.toLocaleString('es-ES', { useGrouping: 'always' });
+}
+
+/**
+ * Versión en español (coma decimal) de `humanizeBytes` de `lib/format.mjs`
+ * — MISMA lógica y MISMOS umbrales, deliberadamente NO importada de ahí:
+ * `lib/format.mjs` es compartida con `bin/oxidegate-savings.mjs`, cuyos
+ * tests fijan el punto decimal (`"31.3 kB"`) como su salida correcta y que
+ * este cambio tiene prohibido tocar. Duplicar 6 líneas es más barato que
+ * bifurcar el contrato de un módulo compartido por un solo dígito de
+ * puntuación (defecto #2, issue #18).
+ */
+function formatBytesEs(bytes) {
+  if (bytes === null || bytes === undefined || Number.isNaN(bytes)) return '-';
+  if (bytes < 1000) return `${bytes} B`;
+  const kb = Math.round((bytes / 1000) * 10) / 10;
+  if (kb < 1000) return `${kb.toFixed(1).replace('.', ',')} kB`;
+  const mb = Math.round((bytes / 1_000_000) * 10) / 10;
+  return `${mb.toFixed(1).replace('.', ',')} MB`;
 }
 
 /** Clave truncada legible. `null` — nunca inventa un string — se marca explícitamente. */
@@ -181,8 +208,11 @@ function pad(value, width, align = 'left') {
  */
 function formatTotalLine(label, totals, { saturated, costNote } = {}) {
   const satTag = saturated ? ' [cota inferior — registro saturado, ver aviso arriba]' : '';
-  const costText =
-    totals.cost === null ? 'desconocido' : `${formatUsd(totals.cost)}${costNote ? ` (${costNote})` : ''}`;
+  // `costNote` marca un grupo categóricamente no atribuible (bloque b): el
+  // hueco del coste lleva la MARCA, nunca una cifra — ni siquiera un `0`
+  // real (defecto #1, issue #18). Un total `null` ya no lleva número
+  // ("desconocido"); no hace falta añadirle la marca encima.
+  const costText = costNote ? costNote : totals.cost === null ? 'desconocido' : formatUsd(totals.cost);
   const parts = [
     `coste=${costText}`,
     `turnos=${totals.requests === null ? 'desconocido' : formatInt(totals.requests)}`,
@@ -224,24 +254,37 @@ function writeSessionsBlock(report) {
 // (b) NO ATRIBUIDO A UNA SESIÓN
 // ---------------------------------------------------------------------
 function writeUnattributedBlock(report) {
+  // La explicación larga de qué son estos cubos y por qué su coste no es
+  // atribuible va AQUÍ, una sola vez (defecto #4, issue #18) — no repetida
+  // en cada fila. Misma disciplina de tabla que (a) para que ambos bloques
+  // se puedan comparar de un vistazo, que es justo lo que un lector quiere
+  // hacer con dos bloques de la misma forma de dato.
   process.stdout.write(
-    '\nNO ATRIBUIDO A UNA SESIÓN (cubos por cliente/user-agent — NUNCA rankeados junto a las sesiones de arriba):\n',
+    '\nNO ATRIBUIDO A UNA SESIÓN (cubos por cliente/user-agent, is_session:false — su coste\n' +
+      'no es el coste de una sesión, y por eso el hueco del coste lleva la marca, nunca una\n' +
+      'cifra; NUNCA rankeados junto a las sesiones de arriba):\n',
   );
   if (report.unattributed.length === 0) {
     process.stdout.write('  no hay filas no atribuidas en esta ventana.\n');
     return;
   }
 
+  process.stdout.write(
+    `  ${pad('CLAVE', 28)}  ${pad('TURNOS', 6, 'right')}  ${pad('COSTE', 12, 'right')}  ` +
+      `${pad('ENTRADA', 10, 'right')}  ${pad('CACHE_LEÍDA', 12, 'right')}  ${pad('SALIDA', 10, 'right')}\n`,
+  );
   for (const row of report.unattributed) {
-    const costText =
-      row.costUsd === null
-        ? 'desconocido'
-        : `${formatUsd(row.costUsd)} (no atribuible — is_session:false, no es el coste de una sesión)`;
+    // Marca corta en el hueco del coste — NUNCA un número, ni siquiera un
+    // `0` real (defecto #1). La explicación larga ya salió en la cabecera
+    // de arriba, una sola vez.
+    const costText = row.costUsd === null ? 'desconocido' : 'no atribuible';
     process.stdout.write(
-      `  - ${truncateKey(row.key)}  turnos=${row.requests === null ? '-' : formatInt(row.requests)}  ` +
-        `entrada=${row.inputTokens === null ? '-' : formatInt(row.inputTokens)}  ` +
-        `cache_leída=${row.cacheReadTokens === null ? '-' : formatInt(row.cacheReadTokens)}  ` +
-        `salida=${row.outputTokens === null ? '-' : formatInt(row.outputTokens)}  coste=${costText}\n`,
+      `  ${pad(truncateKey(row.key), 28)}  ` +
+        `${pad(row.requests === null ? '-' : formatInt(row.requests), 6, 'right')}  ` +
+        `${pad(costText, 12, 'right')}  ` +
+        `${pad(row.inputTokens === null ? '-' : formatInt(row.inputTokens), 10, 'right')}  ` +
+        `${pad(row.cacheReadTokens === null ? '-' : formatInt(row.cacheReadTokens), 12, 'right')}  ` +
+        `${pad(row.outputTokens === null ? '-' : formatInt(row.outputTokens), 10, 'right')}\n`,
     );
   }
 }
@@ -259,10 +302,26 @@ function formatTollMember(name, member) {
   }
   return (
     `      ${name}: ${formatInt(member.bytes)} B × ${formatInt(member.seenIn)} turnos ≈ ` +
-    `${humanizeBytes(member.product)} repetidos\n`
+    `${formatBytesEs(member.product)} repetidos\n`
   );
 }
 
+/** Una fila del peaje "dice algo" si CUALQUIERA de sus tres miembros está medido. */
+function tollRowHasMeasuredMember(row) {
+  return (
+    row.members.hooks.status === 'known' ||
+    row.members.instructions.status === 'known' ||
+    row.members.skills.status === 'known'
+  );
+}
+
+/**
+ * (c) es la tesis del N² medida — la razón de ser de esta lente (defecto
+ * #3, issue #18). Con muchas filas sin nada medido, listarlas una a una
+ * entierra las pocas que sí dicen algo bajo "no medido" repetido: se
+ * resumen en UNA línea con el recuento exacto, nunca se ocultan. Entre las
+ * que sí miden algo, sesiones primero — son el sujeto real del informe.
+ */
 function writeFixedTollBlock(report) {
   process.stdout.write(
     '\nEL PEAJE FIJO POR TURNO (fixed_toll — un payload que se repite en cada turno donde estuvo):\n',
@@ -271,12 +330,36 @@ function writeFixedTollBlock(report) {
     process.stdout.write('  no hay filas en esta ventana: nada que medir de peaje fijo.\n');
     return;
   }
-  for (const row of report.fixedToll) {
+
+  const measured = report.fixedToll.filter(tollRowHasMeasuredMember);
+  const unmeasured = report.fixedToll.filter((row) => !tollRowHasMeasuredMember(row));
+
+  if (measured.length === 0) {
+    const filaWord = report.fixedToll.length === 1 ? 'fila' : 'filas';
+    process.stdout.write(
+      `  ninguna de las ${formatInt(report.fixedToll.length)} ${filaWord} mide nada en este peaje: ` +
+        'hooks, instructions y skills están "no medido" en todas.\n',
+    );
+    return;
+  }
+
+  const sessionRows = measured.filter((row) => row.isSession === true);
+  const otherMeasuredRows = measured.filter((row) => row.isSession !== true);
+  for (const row of [...sessionRows, ...otherMeasuredRows]) {
     const claseTexto = row.isSession === true ? 'sesión' : row.isSession === false ? 'no-sesión' : 'sin clasificar';
     process.stdout.write(`  - ${truncateKey(row.key)} (${claseTexto}):\n`);
     process.stdout.write(formatTollMember('hooks', row.members.hooks));
     process.stdout.write(formatTollMember('instructions', row.members.instructions));
     process.stdout.write(formatTollMember('skills', row.members.skills));
+  }
+
+  if (unmeasured.length > 0) {
+    const filaWord = unmeasured.length === 1 ? 'fila' : 'filas';
+    process.stdout.write(
+      `  + ${formatInt(unmeasured.length)} ${filaWord} más sin ningún miembro medido ` +
+        '(hooks/instructions/skills "no medido" en todas) — no se listan una a una para no ahogar\n' +
+        '    las de arriba, que sí miden algo.\n',
+    );
   }
 }
 

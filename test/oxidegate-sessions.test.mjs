@@ -12,7 +12,7 @@ import { startMockOxideGate } from './helpers/mock-oxidegate-server.mjs';
 import {
   runSessionsCli,
   assertNoFabricatedZeroBytes,
-  assertNoUnmarkedZeroCost,
+  assertNoFabricatedZeroCost,
 } from './helpers/run-sessions-cli.mjs';
 
 const CONTRATO_CON_SESSIONS = {
@@ -122,7 +122,7 @@ test('las filas is_session:false JAMÁS aparecen en el bloque (a) ni se rankean 
   }
 });
 
-test('regla 1: is_session true + cost_usd 0 se imprime como sesión con coste real 0.0000 $, no como "no atribuible"', async () => {
+test('regla 1: is_session true + cost_usd 0 se imprime como sesión con coste real 0,0000 $ (coma, defecto #2), no como "no atribuible"', async () => {
   const filaConCosteReal0 = { ...FILA_SESION_REAL, key: 'ses_sin_precio', cost_usd: 0 };
   const mock = await startMockOxideGate({
     version: CONTRATO_CON_SESSIONS,
@@ -132,22 +132,56 @@ test('regla 1: is_session true + cost_usd 0 se imprime como sesión con coste re
     const { stdout } = await runSessionsCli({ baseUrl: mock.url });
     const sesionesBlock = stdout.split('NO ATRIBUIDO')[0];
     assert.ok(sesionesBlock.includes('ses_sin_precio'));
-    assert.ok(sesionesBlock.includes('0.0000 $'));
+    assert.ok(sesionesBlock.includes('0,0000 $'));
     assert.ok(!sesionesBlock.includes('no atribuible'));
   } finally {
     await mock.close();
   }
 });
 
-test('regla 2: el coste de una fila no atribuible NUNCA sale como "0.0000 $" desnudo — siempre con la marca en la misma línea', async () => {
+test('regla 2: el coste de una fila no atribuible NUNCA sale como "0.0000 $" — el hueco del coste no lleva número, sólo la marca', async () => {
   const mock = await startMockOxideGate({
     version: CONTRATO_CON_SESSIONS,
     sessions: { saturated: false, sessions: [FILA_NO_ATRIBUIDA_REAL] },
   });
   try {
     const { stdout } = await runSessionsCli({ baseUrl: mock.url });
-    assertNoUnmarkedZeroCost(assert, stdout);
+    assertNoFabricatedZeroCost(assert, stdout);
     assert.ok(stdout.includes('no atribuible'));
+    const filaBlock = stdout.split('NO ATRIBUIDO')[1].split('EL PEAJE FIJO')[0];
+    assert.ok(!filaBlock.includes('0.0000 $'), 'la fila no debe imprimir "0.0000 $"');
+    assert.ok(!filaBlock.includes('0,0000 $'), 'la fila no debe imprimir "0,0000 $"');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('regla 2 (totales): el total no atribuido NUNCA imprime "0.0000 $" ni "0,0000 $" — sólo la marca en el hueco del coste', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_NO_ATRIBUIDA_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    assertNoFabricatedZeroCost(assert, stdout);
+    const totalNoAtribuido = stdout.split('\n').find((l) => l.trim().startsWith('total no atribuido'));
+    assert.ok(totalNoAtribuido, 'debe existir la línea de total no atribuido');
+    assert.ok(!totalNoAtribuido.includes('0.0000 $'));
+    assert.ok(!totalNoAtribuido.includes('0,0000 $'));
+    assert.ok(totalNoAtribuido.includes('no atribuible'));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('el render completo (sesiones reales + no atribuidas) sigue sin fabricar ceros de coste en ningún sitio', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL, FILA_NO_ATRIBUIDA_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    assertNoFabricatedZeroCost(assert, stdout);
   } finally {
     await mock.close();
   }
@@ -181,6 +215,182 @@ test('regla del N²: el peaje fijo conocido con turnos conocidos imprime el prod
     await mock.close();
   }
 });
+
+// -------------------------------------------------------------- defecto 2
+
+test('defecto 2: el coste se imprime con COMA decimal (es-ES), nunca con punto', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    // 0.883174 -> "0,8832 $", NUNCA "0.8832 $"
+    assert.ok(stdout.includes('0,8832 $'), `debe aparecer el coste con coma: ${stdout}`);
+    assert.ok(!/\d\.\d{4} ?\$/.test(stdout), 'ningún coste debe llevar punto decimal');
+  } finally {
+    await mock.close();
+  }
+});
+
+test('defecto 2 (totales): el total también usa coma decimal, nunca punto', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const totalSesiones = stdout.split('\n').find((l) => l.trim().startsWith('total sesiones'));
+    assert.ok(totalSesiones.includes('0,8832 $'));
+    assert.ok(!/\d\.\d{4} ?\$/.test(totalSesiones));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('defecto 2 (peaje): las kB del producto bytes × seen_in usan coma decimal, nunca punto', async () => {
+  // bytes=6839, seen_in=25 -> producto=170975 B -> 171,0 kB (coma, NUNCA "171.0 kB")
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    assert.ok(stdout.includes('171,0 kB'), `debe aparecer la kB con coma: ${stdout}`);
+    assert.ok(!/\d+\.\d+ kB/.test(stdout), 'ninguna cifra de kB debe llevar punto decimal');
+  } finally {
+    await mock.close();
+  }
+});
+
+// -------------------------------------------------------------- defecto 3
+
+const FILA_SES_MEDIDA = {
+  key: 'ses_medida',
+  is_session: true,
+  source: 'explicit',
+  cost_usd: 0.5,
+  requests: 10,
+  input_tokens: 1000,
+  cache_read_tokens: 0,
+  output_tokens: 100,
+  fixed_toll: { hooks: null, instructions: null, skills: { bytes: 6839, seen_in: 8 } },
+};
+
+const FILA_NOATRIB_MEDIDA = {
+  key: 'no_atrib_medida',
+  is_session: false,
+  source: 'unattributed',
+  cost_usd: 0,
+  requests: 5,
+  input_tokens: 500,
+  cache_read_tokens: 0,
+  output_tokens: 0,
+  fixed_toll: { hooks: { bytes: 100, seen_in: 5 }, instructions: null, skills: null },
+};
+
+function filaSinMedir(key, isSession) {
+  return {
+    key,
+    is_session: isSession,
+    source: isSession ? 'explicit' : 'unattributed',
+    cost_usd: isSession ? 0.1 : 0,
+    requests: 3,
+    input_tokens: 30,
+    cache_read_tokens: 0,
+    output_tokens: 3,
+    fixed_toll: { hooks: null, instructions: null, skills: null },
+  };
+}
+
+test('defecto 3: las filas con al menos un miembro medido salen detalladas, sesiones antes que no-sesiones; las no medidas se resumen con el recuento exacto', async () => {
+  const filas = [
+    FILA_SES_MEDIDA,
+    FILA_NOATRIB_MEDIDA,
+    filaSinMedir('ses_x', true),
+    filaSinMedir('no_atrib_y', false),
+    filaSinMedir('no_atrib_z', false),
+    filaSinMedir('ses_w', true),
+  ];
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: filas },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const peajeBlock = stdout.split('EL PEAJE FIJO')[1].split('TOTALES')[0];
+
+    // las medidas salen detalladas
+    assert.ok(peajeBlock.includes('ses_medida'));
+    assert.ok(peajeBlock.includes('no_atrib_medida'));
+
+    // sesiones antes que no-sesiones entre las medidas
+    assert.ok(
+      peajeBlock.indexOf('ses_medida') < peajeBlock.indexOf('no_atrib_medida'),
+      'la fila de sesión medida debe salir antes que la fila no-sesión medida',
+    );
+
+    // las no medidas NO se listan una a una
+    assert.ok(!peajeBlock.includes('ses_x'));
+    assert.ok(!peajeBlock.includes('no_atrib_y'));
+    assert.ok(!peajeBlock.includes('no_atrib_z'));
+    assert.ok(!peajeBlock.includes('ses_w'));
+
+    // se resumen con el recuento EXACTO (4 filas sin medir)
+    assert.ok(/\b4\b/.test(peajeBlock), 'debe aparecer el número exacto de filas sin medir (4)');
+    assert.ok(peajeBlock.includes('no se listan una a una'));
+  } finally {
+    await mock.close();
+  }
+});
+
+test('defecto 3: si NINGUNA fila mide nada, el bloque lo dice explícitamente en vez de quedar vacío', async () => {
+  const filas = [filaSinMedir('ses_x', true), filaSinMedir('no_atrib_y', false), filaSinMedir('ses_w', true)];
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: filas },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const peajeBlock = stdout.split('EL PEAJE FIJO')[1].split('TOTALES')[0];
+    assert.ok(peajeBlock.includes('ninguna'), 'debe decir explícitamente que ninguna fila mide nada');
+    assert.ok(/\b3\b/.test(peajeBlock), 'debe mencionar el número exacto de filas (3)');
+    assert.ok(!peajeBlock.includes('ses_x'));
+  } finally {
+    await mock.close();
+  }
+});
+
+// -------------------------------------------------------------- defecto 4
+
+test('defecto 4: el bloque (b) es una tabla con la misma cabecera de columnas que (a), y la explicación larga sale UNA sola vez, no por fila', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SESION_REAL, FILA_NO_ATRIBUIDA_REAL] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const noAtribuidoBlock = stdout.split('NO ATRIBUIDO')[1].split('EL PEAJE FIJO')[0];
+
+    // misma disciplina de tabla que (a): cabecera de columnas
+    assert.ok(noAtribuidoBlock.includes('CLAVE'));
+    assert.ok(noAtribuidoBlock.includes('TURNOS'));
+    assert.ok(noAtribuidoBlock.includes('COSTE'));
+
+    // la explicación larga sale UNA sola vez en todo el stdout (cabecera del bloque)
+    const occurrences = (stdout.match(/no es el coste de una sesión/g) || []).length;
+    assert.equal(occurrences, 1, 'la coletilla larga debe salir una sola vez, no por fila');
+
+    // la fila en sí no repite la coletilla larga
+    const filaLine = noAtribuidoBlock.split('\n').find((l) => l.includes('unattributed'));
+    assert.ok(filaLine, 'debe existir la línea de la fila no atribuida');
+    assert.ok(!filaLine.includes('no es el coste de una sesión'));
+  } finally {
+    await mock.close();
+  }
+});
+
+// -------------------------------------------------------------- fin nuevos tests
 
 test('sessions: [] real -> "no hay sesiones registradas", nunca un error de lectura', async () => {
   const mock = await startMockOxideGate({
