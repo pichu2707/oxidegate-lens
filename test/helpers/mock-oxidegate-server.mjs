@@ -32,10 +32,23 @@ import { createServer } from 'node:http';
  *   - `version: 'fail'`: destruye el socket sin responder, para simular un
  *     fallo de red a media petición.
  *
- * @param {{ requests?: unknown[], stats?: unknown[], health?: boolean, version?: object|'fail' }} fixtures
+ * `/sessions` es el endpoint que lee `lib/session-report.mjs` (issue #18).
+ * Mismo patrón tri-estado que `/version`, MÁS validación real de `?since=`:
+ *   - sin pasar `sessions` (default): 404 — un OxideGate anterior a este
+ *     endpoint. Default a propósito: ningún test existente habla de
+ *     sesiones y no debe tener que declarar nada para seguir representando
+ *     un proxy real y viejo.
+ *   - `sessions: {saturated, sessions: [...]}`: responde 200 con ese cuerpo
+ *     tal cual — SALVO que `?since=` no cumpla el contrato real
+ *     (`YYYY-MM-DD` o `<n>d`), en cuyo caso responde 400 con el mismo texto
+ *     plano (no JSON) que el proxy real, para que la lente pueda testear que
+ *     relaya ese mensaje verbatim.
+ *   - `sessions: 'fail'`: destruye el socket sin responder.
+ *
+ * @param {{ requests?: unknown[], stats?: unknown[], health?: boolean, version?: object|'fail', sessions?: object|'fail' }} fixtures
  * @returns {Promise<{ url: string, close: () => Promise<void> }>}
  */
-export function startMockOxideGate({ requests = [], stats = [], health = true, version } = {}) {
+export function startMockOxideGate({ requests = [], stats = [], health = true, version, sessions } = {}) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       if (req.url === '/health') {
@@ -60,6 +73,30 @@ export function startMockOxideGate({ requests = [], stats = [], health = true, v
         }
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(version));
+        return;
+      }
+      if (req.url === '/sessions' || req.url.startsWith('/sessions?')) {
+        if (sessions === 'fail') {
+          req.socket.destroy();
+          return;
+        }
+        if (sessions === undefined) {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'not found' }));
+          return;
+        }
+        const since = new URL(req.url, 'http://127.0.0.1').searchParams.get('since');
+        // Mismo contrato que el proxy real: `YYYY-MM-DD` o un número de días
+        // como `7d`. Cualquier otra cosa es un 400 en TEXTO PLANO, no JSON —
+        // igual que la respuesta real capturada con curl.
+        const validSince = since === null || /^\d{4}-\d{2}-\d{2}$/.test(since) || /^\d+d$/.test(since);
+        if (!validSince) {
+          res.writeHead(400, { 'content-type': 'text/plain' });
+          res.end(`\`since=${since}\`: use una fecha YYYY-MM-DD o un numero de dias como \`7d\`\n`);
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(sessions));
         return;
       }
       const body = req.url === '/requests' ? requests : req.url === '/stats' ? stats : null;
