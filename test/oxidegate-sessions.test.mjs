@@ -83,6 +83,26 @@ const FILA_SIN_CLASIFICAR = {
   fixed_toll: { hooks: null, instructions: null, skills: null },
 };
 
+// hallazgo 5 (issue #18, revisión adversarial): detectadas por mutación —
+// dos ramas de render correctas por inspección, pero sin ningún test que
+// las obligara a existir.
+const FILA_SIN_CLASIFICAR_CON_PEAJE = {
+  key: 'sin_clasificar_con_peaje',
+  cost_usd: 1,
+  requests: 4,
+  fixed_toll: { hooks: { bytes: 50, seen_in: 4 }, instructions: null, skills: null },
+};
+
+const FILA_SIN_CLAVE = {
+  is_session: true,
+  source: 'explicit',
+  cost_usd: 1,
+  requests: 1,
+  input_tokens: 1,
+  cache_read_tokens: 0,
+  output_tokens: 1,
+};
+
 test('--help imprime la ayuda y sale con 0, sin tocar la red', async () => {
   const { stdout, code } = await runSessionsCli({ baseUrl: 'http://127.0.0.1:1', args: ['--help'] });
   assert.equal(code, 0);
@@ -740,3 +760,32 @@ test("hallazgo 4: --since '' (cadena vacía explícita) sigue funcionando — el
   }
 });
 
+// ------------------------------------------------------------- hallazgo 5
+
+test('hallazgo 5: una fila sin clasificar con peaje medido se etiqueta "sin clasificar" en el bloque del peaje', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SIN_CLASIFICAR_CON_PEAJE] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    const peajeBlock = stdout.split('EL PEAJE FIJO')[1].split('TOTALES')[0];
+    assert.ok(peajeBlock.includes('sin_clasificar_con_peaje'));
+    assert.ok(peajeBlock.includes('sin clasificar'), `debe etiquetarse "sin clasificar": ${peajeBlock}`);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('hallazgo 5: una fila sin `key` se marca "(clave desconocida)", nunca un string inventado', async () => {
+  const mock = await startMockOxideGate({
+    version: CONTRATO_CON_SESSIONS,
+    sessions: { saturated: false, sessions: [FILA_SIN_CLAVE] },
+  });
+  try {
+    const { stdout } = await runSessionsCli({ baseUrl: mock.url });
+    assert.ok(stdout.includes('(clave desconocida)'), `debe marcar la clave ausente: ${stdout}`);
+  } finally {
+    await mock.close();
+  }
+});
