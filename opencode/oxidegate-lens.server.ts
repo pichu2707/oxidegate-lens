@@ -37,6 +37,7 @@ import { buildValveRows } from '../lib/mcp-valve.mjs';
 import { readProtectedServers, planMcpDisable, readDisableByDefault } from '../lib/mcp-protection.mjs';
 import { diffMcpStatus, partitionByConnected } from '../lib/mcp-transitions.mjs';
 import { startupNotice, transitionNotice } from '../lib/mcp-notices.mjs';
+import { buildConnectDescription, DISCONNECT_DESCRIPTION, VALVE_DESCRIPTION } from '../lib/mcp-connect-description.mjs';
 import { resolveHandoffPath, writeStartupNotice } from '../lib/mcp-notice-handoff.mjs';
 import { readProjectConfig, readApprovals } from '../lib/mcp-project-config.mjs';
 import {
@@ -251,11 +252,30 @@ export default {
       }
     };
 
+    // The connect tool's description is data (which servers are down, what they
+    // offer). The tool registry re-reads definitions on every request, so a
+    // `ctx.tool.reload()` after a status change reaches the next model request.
+    const currentConnectDescription = () =>
+      buildConnectDescription({
+        status: (lastKnownMcpStatus ?? null) as any,
+        snapshot: readMcpSavingsSnapshot({}),
+      });
+    let publishedConnectDescription = '';
+    const refreshConnectDescription = async () => {
+      try {
+        const next = currentConnectDescription();
+        if (next === publishedConnectDescription) return;
+        publishedConnectDescription = next;
+        await ctx.tool.reload();
+      } catch (error) {
+        debugLog(`[oxidegate-lens] connect description refresh failed: ${formatError(error)}`);
+      }
+    };
+
     await ctx.tool.transform((editor: any) => {
       editor.add({
         name: 'oxidegate_lens_mcp_valve',
-        description:
-          'Inspect OpenCode MCP server status, join it with mcp-savings price data and OxideGate observed wire usage, and report a per-server recommendation (candidate-to-disable / already-off / no-recommendation, each with a named reason) before manual MCP valve tests.',
+        description: VALVE_DESCRIPTION,
         input: mcpToolInput('valve'),
         options: DIRECT_TOOL,
         execute: async () => {
@@ -282,14 +302,16 @@ export default {
       });
       editor.add({
         name: 'oxidegate_lens_mcp_disconnect',
-        description: 'Manually disconnect one OpenCode MCP server and report MCP/tool-list snapshots before and after.',
+        description: DISCONNECT_DESCRIPTION,
         input: mcpToolInput('disconnect'),
         options: DIRECT_TOOL,
         execute: switchServer('disconnect'),
       });
       editor.add({
         name: 'oxidegate_lens_mcp_connect',
-        description: 'Manually connect one OpenCode MCP server and report MCP/tool-list snapshots before and after.',
+        // Lists the servers disconnected RIGHT NOW and their tools, so the model
+        // can connect one on its own. Rebuilt on every status change (below).
+        description: (publishedConnectDescription = currentConnectDescription()),
         input: mcpToolInput('connect'),
         options: DIRECT_TOOL,
         execute: switchServer('connect'),
@@ -314,6 +336,7 @@ export default {
         const diff = diffMcpStatus(lastKnownMcpStatus, status);
         lastKnownMcpStatus = status ?? lastKnownMcpStatus;
         emitNotice(transitionNotice(diff));
+        await refreshConnectDescription();
       } catch (error) {
         debugLog(`[oxidegate-lens] MCP transition poll failed: ${formatError(error)}`);
       }
@@ -404,6 +427,7 @@ export default {
         // Re-read rather than assume: an override that did not take must not be reported as off.
         const afterStatus = await readStatus();
         lastKnownMcpStatus = afterStatus ?? undefined;
+        await refreshConnectDescription();
         const startup = startupNotice({ partition: partitionByConnected(afterStatus), plan, prices: readPricesForNotice() });
         emitNotice(startup);
         // The TUI entry (if enabled) turns this into a toast; best-effort.
@@ -412,7 +436,19 @@ export default {
         console.warn(`[oxidegate-lens] MCP disabled-by-default failed: ${formatError(error)}`);
       }
     };
-    void disableMcpServersByDefault();
+    void (async () => {
+      // Prime the status so the connect description is real from the start
+      // even when disable-by-default is off (no later event may come).
+      try {
+        const primed = await readStatus();
+        // An empty list may just mean 'not loaded yet'; do not bake that in as a baseline.
+        if (primed && Object.keys(primed).length > 0) lastKnownMcpStatus = primed;
+        await refreshConnectDescription();
+      } catch {
+        // best-effort
+      }
+      await disableMcpServersByDefault();
+    })();
 
     return () => controller.abort();
   },

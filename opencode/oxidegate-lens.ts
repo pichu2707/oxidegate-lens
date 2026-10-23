@@ -47,6 +47,7 @@ import { readProtectedServers, planMcpDisable, readDisableByDefault } from '../l
 import { diffMcpStatus, partitionByConnected } from '../lib/mcp-transitions.mjs';
 import { startupNotice, transitionNotice } from '../lib/mcp-notices.mjs';
 import { readProjectConfig, readApprovals } from '../lib/mcp-project-config.mjs';
+import { buildConnectDescription, DISCONNECT_DESCRIPTION, VALVE_DESCRIPTION } from '../lib/mcp-connect-description.mjs';
 
 // OxideGate's own default. Kept deliberately in sync with it — but 8080 is a
 // crowded port (Apache, Tomcat, Jenkins all squat it), so if OxideGate is
@@ -482,8 +483,7 @@ export async function OxidegateLens({ project, client, $, directory, worktree }:
       ? {
           tool: {
             oxidegate_lens_mcp_valve: openCodeTool({
-              description:
-                'Inspect OpenCode MCP server status, join it with mcp-savings price data and OxideGate observed wire usage, and report a per-server recommendation (candidate-to-disable / already-off / no-recommendation, each with a named reason) before manual MCP valve tests.',
+              description: VALVE_DESCRIPTION,
               args: {
                 provider: openCodeTool.schema.string().optional(),
                 model: openCodeTool.schema.string().optional(),
@@ -518,7 +518,7 @@ export async function OxidegateLens({ project, client, $, directory, worktree }:
               },
             }),
             oxidegate_lens_mcp_disconnect: openCodeTool({
-              description: 'Manually disconnect one OpenCode MCP server and report MCP/tool-list snapshots before and after.',
+              description: DISCONNECT_DESCRIPTION,
               args: {
                 server: openCodeTool.schema.string(),
                 provider: openCodeTool.schema.string().optional(),
@@ -555,7 +555,14 @@ export async function OxidegateLens({ project, client, $, directory, worktree }:
               },
             }),
             oxidegate_lens_mcp_connect: openCodeTool({
-              description: 'Manually connect one OpenCode MCP server and report MCP/tool-list snapshots before and after.',
+              // A getter, so the text names the servers disconnected when OpenCode
+              // next reads it (see lib/mcp-connect-description.mjs).
+              get description() {
+                return buildConnectDescription({
+                  status: (lastKnownMcpStatus ?? null) as any,
+                  snapshot: readMcpSavingsSnapshot({}),
+                });
+              },
               args: {
                 server: openCodeTool.schema.string(),
                 provider: openCodeTool.schema.string().optional(),
