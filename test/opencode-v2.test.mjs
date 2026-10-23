@@ -20,6 +20,7 @@ import {
   overridesSettled,
   waitUntilSettled,
   planSwitch,
+  toastFromNotice,
   V2_DEGRADATIONS,
   summarizeMcpStatus,
   valveResult,
@@ -286,6 +287,12 @@ test('noticeToLogLine: warning goes to the warn level, everything else to log, a
   });
 });
 
+test('toastFromNotice: same durations as the v1 toast (warnings stay longer); null stays null', () => {
+  assert.equal(toastFromNotice(null), null);
+  assert.deepEqual(toastFromNotice({ title: 'T', message: 'm', variant: 'warning' }), { title: 'T', message: 'm', variant: 'warning', duration: 10000 });
+  assert.deepEqual(toastFromNotice({ title: 'T', message: 'm', variant: 'info' }), { title: 'T', message: 'm', variant: 'info', duration: 5000 });
+});
+
 // ----------------------------------------------------------------- tools
 
 test('mcpToolInput: valve takes only optional provider/model', () => {
@@ -382,4 +389,21 @@ test('v2 entry: also carries the v1 `server` function, because OpenCode 1.x reso
   const src = readFileSync(resolve(__dirname, '../opencode/oxidegate-lens.server.ts'), 'utf8');
   assert.match(src, /import \{ OxidegateLens \} from '\.\/oxidegate-lens\.ts'/, 'reuse the v1 plugin function, do not copy it');
   assert.match(src, /\bserver:\s*OxidegateLens\b/, 'v1 reads default.server');
+});
+
+test('package.json: "./tui" is the TUI entry; no @opentui/solid-js in regular dependencies (host provides them)', () => {
+  const pkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf8'));
+  assert.equal(pkg.exports['./tui'], './opencode/oxidegate-lens.tui.ts');
+  for (const name of Object.keys(pkg.dependencies ?? {})) {
+    assert.ok(!/^@opentui\/|^solid-js$/.test(name), `${name} must not be a regular dependency`);
+  }
+});
+
+test('TUI entry: default-exports { id, setup }, toasts through ctx.ui.toast, imports no opentui/solid', () => {
+  const src = readFileSync(resolve(__dirname, '../opencode/oxidegate-lens.tui.ts'), 'utf8');
+  assert.match(src, /export default/);
+  assert.match(src, /\bid:\s*'oxidegate-lens\.tui'/);
+  assert.match(src, /ctx\.ui\.toast\.show/);
+  assert.match(src, /mcp\.status\.changed/);
+  assert.ok(!/from '@opentui|from 'solid-js|@opencode\/plugin/.test(src), 'no runtime imports from host-provided packages');
 });
