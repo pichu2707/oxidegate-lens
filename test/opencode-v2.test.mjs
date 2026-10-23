@@ -19,6 +19,7 @@ import {
   mcpToolInput,
   overridesSettled,
   waitUntilSettled,
+  planSwitch,
   V2_DEGRADATIONS,
   summarizeMcpStatus,
   valveResult,
@@ -91,19 +92,19 @@ test('applyMcpOverrides: sets disabled true/false on known servers and reports t
   const result = applyMcpOverrides(editor, new Map([['a', true], ['b', false]]));
   assert.equal(editor.servers.get('a').disabled, true);
   assert.equal(editor.servers.get('b').disabled, false);
-  assert.deepEqual(result, { applied: ['a', 'b'], missing: [] });
+  assert.deepEqual(result, { applied: ['a', 'b'], missing: [], previous: { a: undefined, b: true } });
 });
 
 test('applyMcpOverrides: an unknown server is reported missing and nothing is invented', () => {
   const editor = fakeEditor({ a: { type: 'local' } });
   const result = applyMcpOverrides(editor, { ghost: true });
-  assert.deepEqual(result, { applied: [], missing: ['ghost'] });
+  assert.deepEqual(result, { applied: [], missing: ['ghost'], previous: {} });
   assert.equal(editor.servers.has('ghost'), false);
 });
 
 test('applyMcpOverrides: no overrides touches nothing', () => {
   const editor = fakeEditor({ a: { type: 'local' } });
-  assert.deepEqual(applyMcpOverrides(editor, new Map()), { applied: [], missing: [] });
+  assert.deepEqual(applyMcpOverrides(editor, new Map()), { applied: [], missing: [], previous: {} });
   assert.equal('disabled' in editor.servers.get('a'), false);
 });
 
@@ -126,6 +127,54 @@ test('overridesSettled: unreadable status is never "settled"; no overrides trivi
   assert.equal(overridesSettled(null, new Map([['a', true]])), false);
   assert.equal(overridesSettled(null, new Map()), true);
   assert.equal(overridesSettled({}, new Map([['gone', true]])), true);
+});
+
+// ------------------------------------------------------------ switch plan
+//
+// OpenCode's reconcile skips servers whose config is deep-equal to the one it
+// last applied. When something else (the TUI /mcp dialog) changed the server's
+// runtime state without touching config, re-applying the same override is a
+// no-op and the server stays where the user left it. planSwitch spots that.
+
+test('planSwitch: connect with a different config is a plain direct change', () => {
+  assert.deepEqual(planSwitch({ action: 'connect', status: 'disabled', applied: true }), { mode: 'direct', disabled: false });
+  assert.deepEqual(planSwitch({ action: 'connect', status: 'disabled', applied: undefined, base: undefined }), { mode: 'direct', disabled: false });
+});
+
+test('planSwitch: connect when config already says enabled but the server is down (TUI disconnect) -> toggle', () => {
+  for (const status of ['disabled', 'failed', 'needs_auth']) {
+    assert.deepEqual(planSwitch({ action: 'connect', status, applied: false }), { mode: 'toggle', disabled: false }, status);
+  }
+  assert.deepEqual(planSwitch({ action: 'connect', status: 'disabled', applied: undefined, base: false }), { mode: 'toggle', disabled: false });
+});
+
+test('planSwitch: connect on a server that is already connected or starting never toggles', () => {
+  for (const status of ['connected', 'pending']) {
+    assert.equal(planSwitch({ action: 'connect', status, applied: false }).mode, 'direct', status);
+  }
+});
+
+test('planSwitch: disconnect when config already says disabled but the server is up (TUI connect) -> toggle', () => {
+  for (const status of ['connected', 'pending', 'failed']) {
+    assert.deepEqual(planSwitch({ action: 'disconnect', status, applied: true }), { mode: 'toggle', disabled: true }, status);
+  }
+  assert.deepEqual(planSwitch({ action: 'disconnect', status: 'connected', applied: undefined, base: true }), { mode: 'toggle', disabled: true });
+});
+
+test('planSwitch: disconnect of a server already disabled, or with a different config, is direct', () => {
+  assert.equal(planSwitch({ action: 'disconnect', status: 'disabled', applied: true }).mode, 'direct');
+  assert.equal(planSwitch({ action: 'disconnect', status: 'connected', applied: false }).mode, 'direct');
+  assert.equal(planSwitch({ action: 'disconnect', status: 'connected', applied: undefined, base: undefined }).mode, 'direct');
+});
+
+test('planSwitch: unreadable status (undefined) is treated as not matching, so a stuck config still toggles', () => {
+  assert.equal(planSwitch({ action: 'connect', status: undefined, applied: false }).mode, 'toggle');
+});
+
+test('applyMcpOverrides: reports the config value each server had before the override (for planSwitch)', () => {
+  const editor = fakeEditor({ a: { type: 'local' }, b: { type: 'local', disabled: true } });
+  const result = applyMcpOverrides(editor, new Map([['a', true], ['b', false]]));
+  assert.deepEqual(result.previous, { a: undefined, b: true });
 });
 
 // ---------------------------------------------------- event-driven settle
