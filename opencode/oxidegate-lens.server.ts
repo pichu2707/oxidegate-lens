@@ -37,6 +37,7 @@ import { buildValveRows } from '../lib/mcp-valve.mjs';
 import { readProtectedServers, planMcpDisable, readDisableByDefault } from '../lib/mcp-protection.mjs';
 import { diffMcpStatus, partitionByConnected } from '../lib/mcp-transitions.mjs';
 import { startupNotice, transitionNotice } from '../lib/mcp-notices.mjs';
+import { resolveHandoffPath, writeStartupNotice } from '../lib/mcp-notice-handoff.mjs';
 import { readProjectConfig, readApprovals } from '../lib/mcp-project-config.mjs';
 import {
   mcpListToStatus,
@@ -377,7 +378,9 @@ export default {
           console.warn(
             `[oxidegate-lens] MCP disabled-by-default refused: protection unreadable (${plan.protectionReason}); nothing disconnected`,
           );
-          emitNotice(startupNotice({ partition: partitionByConnected(status), plan, prices: readPricesForNotice() }));
+          const refusal = startupNotice({ partition: partitionByConnected(status), plan, prices: readPricesForNotice() });
+          emitNotice(refusal);
+          writeStartupNotice({ path: resolveHandoffPath(), notice: refusal, now: Date.now() });
           return;
         }
 
@@ -401,7 +404,10 @@ export default {
         // Re-read rather than assume: an override that did not take must not be reported as off.
         const afterStatus = await readStatus();
         lastKnownMcpStatus = afterStatus ?? undefined;
-        emitNotice(startupNotice({ partition: partitionByConnected(afterStatus), plan, prices: readPricesForNotice() }));
+        const startup = startupNotice({ partition: partitionByConnected(afterStatus), plan, prices: readPricesForNotice() });
+        emitNotice(startup);
+        // The TUI entry (if enabled) turns this into a toast; best-effort.
+        writeStartupNotice({ path: resolveHandoffPath(), notice: startup, now: Date.now() });
       } catch (error) {
         console.warn(`[oxidegate-lens] MCP disabled-by-default failed: ${formatError(error)}`);
       }
