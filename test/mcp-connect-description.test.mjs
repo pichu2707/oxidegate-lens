@@ -44,6 +44,14 @@ test('a server declaring zero tools says so explicitly (a different claim from u
   assert.match(text, /a: no tools declared/);
 });
 
+test('an empty tool list from a server that could not be measured is unknown, not "no tools declared"', () => {
+  // mcp-savings records `tools: []` with price cannot-measure when the server was down at measurement time.
+  const unmeasured = { name: 'a', price: { status: 'unknown', reason: 'cannot-measure' }, toolNames: [] };
+  const text = buildConnectDescription({ status: { a: { status: 'disabled' } }, snapshot: known([unmeasured]) });
+  assert.match(text, /a: tools unknown/);
+  assert.ok(!/no tools declared/.test(text));
+});
+
 test('failed servers are offered (connecting retries them) and flagged; needs_auth and pending are not', () => {
   const text = buildConnectDescription({
     status: { f: { status: 'failed', error: 'x' }, n: { status: 'needs_auth' }, p: { status: 'pending' }, d: { status: 'disabled' } },
