@@ -44,6 +44,7 @@ import {
   isMcpStatusChangedEvent,
   overridesSettled,
   waitUntilSettled,
+  planSwitch,
   noticeToLogLine,
   mcpToolInput,
   V2_DEGRADATIONS,
@@ -150,14 +151,19 @@ export default {
     // Reloads, then waits (bounded) for the status to reflect `overrides`.
     // Returns whether it did; the caller reports the reading either way, so a
     // timeout degrades to "read at timeout", never to a silent assumption.
-    const reloadAndSettle = async (): Promise<{ settled: boolean; reloadMs: number; settleMs: number }> => {
+    // `expect` is the subset of overrides this call is responsible for: other
+    // entries in `overrides` may legitimately disagree with the status (the
+    // user can flip a server from the TUI), and must not fail this wait.
+    const reloadAndSettle = async (
+      expect: Map<string, boolean> = overrides,
+    ): Promise<{ settled: boolean; reloadMs: number; settleMs: number }> => {
       const t0 = Date.now();
       await ctx.mcp.reload();
       const t1 = Date.now();
       // Event-driven (no polling): subscribed before the first check, so a
       // change landing in between is not missed. See waitUntilSettled.
       const settled = await waitUntilSettled({
-        check: async () => overridesSettled(await readStatus(), overrides),
+        check: async () => overridesSettled(await readStatus(), expect),
         subscribe: (cb) => {
           statusListeners.add(cb);
           return () => statusListeners.delete(cb);
@@ -167,14 +173,34 @@ export default {
       return { settled, reloadMs: t1 - t0, settleMs: Date.now() - t1 };
     };
 
-    const applyOverride = async (server: string, disabled: boolean) => {
-      overrides.set(server, disabled);
-      return reloadAndSettle();
+    // The config value each server had BEFORE our override, as seen by the
+    // last transform run (needed by planSwitch).
+    const baseDisabled = new Map<string, boolean | undefined>();
+
+    // Moves one server. When the config already holds the wanted value but the
+    // server is elsewhere (TUI /mcp changes runtime state, not config),
+    // reconcile would skip it, so flip to the opposite value first. See planSwitch.
+    const applyOverride = async (server: string, action: 'connect' | 'disconnect') => {
+      const status = (await readStatus())?.[server]?.status;
+      const plan = planSwitch({ action, status, applied: overrides.get(server), base: baseDisabled.get(server) });
+      let reloadMs = 0;
+      let settleMs = 0;
+      if (plan.mode === 'toggle') {
+        overrides.set(server, !plan.disabled);
+        const first = await reloadAndSettle(new Map([[server, !plan.disabled]]));
+        reloadMs += first.reloadMs;
+        settleMs += first.settleMs;
+        if (!first.settled) return { settled: false, reloadMs, settleMs, toggled: true };
+      }
+      overrides.set(server, plan.disabled);
+      const last = await reloadAndSettle(new Map([[server, plan.disabled]]));
+      return { settled: last.settled, reloadMs: reloadMs + last.reloadMs, settleMs: settleMs + last.settleMs, toggled: plan.mode === 'toggle' };
     };
 
     await ctx.mcp.transform((editor: any) => {
-      const { missing } = applyMcpOverrides(editor, overrides);
+      const { missing, previous } = applyMcpOverrides(editor, overrides);
       for (const name of missing) overrides.delete(name);
+      for (const [name, value] of Object.entries(previous)) baseDisabled.set(name, value as boolean | undefined);
     });
 
     const collectSnapshot = async () => {
@@ -203,7 +229,7 @@ export default {
         if (!before.mcp_status || !(server in before.mcp_status)) {
           throw new Error(`unknown MCP server: ${server}`);
         }
-        const { settled, reloadMs, settleMs } = await applyOverride(server, action === 'disconnect');
+        const { settled, reloadMs, settleMs, toggled } = await applyOverride(server, action);
         const after = await collectSnapshot();
         stderrLog(`[oxidegate-lens] MCP ${action} ${server}; via ctx.mcp.transform+reload; settled=${settled}`);
         return {
@@ -213,6 +239,7 @@ export default {
             server,
             sdk_result: `disabled=${action === 'disconnect'} (config override + reload; not a socket-level ${action})`,
             settled,
+            toggled,
             timing_ms: { reload: reloadMs, settle: settleMs },
             before,
             after,
