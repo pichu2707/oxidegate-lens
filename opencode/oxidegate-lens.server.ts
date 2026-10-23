@@ -47,6 +47,7 @@ import {
   overridesSettled,
   waitUntilSettled,
   planSwitch,
+  connectHintForResult,
   noticeToLogLine,
   mcpToolInput,
   V2_DEGRADATIONS,
@@ -321,7 +322,27 @@ export default {
     // After every tool call, log the newest measured request. Silent on any
     // failure: this runs constantly and misconfiguration is reported once by
     // probeEndpoint.
-    await ctx.tool.hook('execute.after', async () => {
+    await ctx.tool.hook('execute.after', async (event: any) => {
+      try {
+        // A call into a disconnected MCP server fails with a message that only
+        // points at the /mcp UI; append the way out the model can actually use.
+        if (event?.tool === 'execute' && event?.status === 'completed') {
+          // Read the configured names fresh (cheap, and only on this rare path)
+          // rather than trusting a cache that may predate the server list.
+          const mentionsMcp = JSON.stringify(event.result?.content ?? '').includes('MCP server');
+          const status = mentionsMcp ? await readStatus() : null;
+          const hint = connectHintForResult({
+            content: event.result?.content,
+            servers: status ? Object.keys(status) : null,
+          });
+          if (hint) {
+            const parts = Array.isArray(event.result.content) ? event.result.content : [{ type: 'text', text: String(event.result.content ?? '') }];
+            event.result.content = [...parts, { type: 'text', text: hint }];
+          }
+        }
+      } catch {
+        // never let the hint break a tool call
+      }
       try {
         const line = latestRequestLine(await fetchRequests());
         if (line) stderrLog(line);
