@@ -27,7 +27,7 @@
   },
   "exports": {
     ".": "./opencode/oxidegate-lens.ts",
-    "./server": "./opencode/oxidegate-lens.ts",
+    "./server": "./opencode/oxidegate-lens.server.ts",
     "./package.json": "./package.json",
     "./*": "./*"
   },
