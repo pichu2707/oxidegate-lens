@@ -43,6 +43,7 @@ import {
   applyMcpOverrides,
   isMcpStatusChangedEvent,
   overridesSettled,
+  waitUntilSettled,
   noticeToLogLine,
   mcpToolInput,
   V2_DEGRADATIONS,
@@ -59,10 +60,11 @@ const DEBUG_ENV = 'OXIDEGATE_LENS_DEBUG';
 // v2 hides plugin tools behind its `execute` code-mode tool unless told
 // otherwise. v1 exposed these three as plain tools (and consumers enable them
 // by name), so keep them directly callable.
-// `ctx.mcp.reload()` resolves before servers finish moving; wait this long,
-// at most, for the status to show the overrides before reading it as fact.
-const SETTLE_TIMEOUT_MS = 5000;
-const SETTLE_STEP_MS = 150;
+// Safety net only. Measured on 2.1.4: `ctx.mcp.reload()` resolves only after
+// the changed server has finished (re)connecting, and the status already
+// shows the override when it returns (settle wait ~0 ms). The wait below is
+// woken by `mcp.status.changed`; this timeout just bounds a lost event.
+const SETTLE_TIMEOUT_MS = 3000;
 
 const DIRECT_TOOL = { codemode: false };
 
@@ -137,6 +139,8 @@ export default {
     // `undefined` = "not looked yet", which is NOT "no servers" (see lib/mcp-transitions.mjs).
     let lastKnownMcpStatus: unknown;
     const controller = new AbortController();
+    // Callbacks woken by every mcp.status.changed (see waitUntilSettled).
+    const statusListeners = new Set<() => void>();
 
     probeEndpoint(resolveBaseUrl());
     console.warn(`[oxidegate-lens] running on OpenCode 2.x with reduced capabilities: ${V2_DEGRADATIONS.join('; ')}`);
@@ -146,14 +150,21 @@ export default {
     // Reloads, then waits (bounded) for the status to reflect `overrides`.
     // Returns whether it did; the caller reports the reading either way, so a
     // timeout degrades to "read at timeout", never to a silent assumption.
-    const reloadAndSettle = async (): Promise<boolean> => {
+    const reloadAndSettle = async (): Promise<{ settled: boolean; reloadMs: number; settleMs: number }> => {
+      const t0 = Date.now();
       await ctx.mcp.reload();
-      const deadline = Date.now() + SETTLE_TIMEOUT_MS;
-      for (;;) {
-        if (overridesSettled(await readStatus(), overrides)) return true;
-        if (Date.now() >= deadline) return false;
-        await new Promise((resolve) => setTimeout(resolve, SETTLE_STEP_MS));
-      }
+      const t1 = Date.now();
+      // Event-driven (no polling): subscribed before the first check, so a
+      // change landing in between is not missed. See waitUntilSettled.
+      const settled = await waitUntilSettled({
+        check: async () => overridesSettled(await readStatus(), overrides),
+        subscribe: (cb) => {
+          statusListeners.add(cb);
+          return () => statusListeners.delete(cb);
+        },
+        timeoutMs: SETTLE_TIMEOUT_MS,
+      });
+      return { settled, reloadMs: t1 - t0, settleMs: Date.now() - t1 };
     };
 
     const applyOverride = async (server: string, disabled: boolean) => {
@@ -192,7 +203,7 @@ export default {
         if (!before.mcp_status || !(server in before.mcp_status)) {
           throw new Error(`unknown MCP server: ${server}`);
         }
-        const settled = await applyOverride(server, action === 'disconnect');
+        const { settled, reloadMs, settleMs } = await applyOverride(server, action === 'disconnect');
         const after = await collectSnapshot();
         stderrLog(`[oxidegate-lens] MCP ${action} ${server}; via ctx.mcp.transform+reload; settled=${settled}`);
         return {
@@ -202,6 +213,7 @@ export default {
             server,
             sdk_result: `disabled=${action === 'disconnect'} (config override + reload; not a socket-level ${action})`,
             settled,
+            timing_ms: { reload: reloadMs, settle: settleMs },
             before,
             after,
           }),
@@ -283,7 +295,10 @@ export default {
     void (async () => {
       try {
         for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
-          if (isMcpStatusChangedEvent(event)) await pollMcpTransitions();
+          if (isMcpStatusChangedEvent(event)) {
+            for (const wake of [...statusListeners]) wake();
+            await pollMcpTransitions();
+          }
         }
       } catch (error) {
         if (!controller.signal.aborted) {
@@ -313,6 +328,18 @@ export default {
       }
 
       try {
+        // At plugin load the initial reconcile may not have registered the
+        // configured servers yet, so an EMPTY list can mean "not loaded yet"
+        // rather than "none configured". Give it one event-driven chance to
+        // fill in (bounded) before concluding there is nothing to do.
+        await waitUntilSettled({
+          check: async () => Object.keys((await readStatus()) ?? {}).length > 0,
+          subscribe: (cb) => {
+            statusListeners.add(cb);
+            return () => statusListeners.delete(cb);
+          },
+          timeoutMs: SETTLE_TIMEOUT_MS,
+        });
         const status = await readStatus();
         lastKnownMcpStatus = status ?? undefined;
         const servers = status ? Object.keys(status) : [];
@@ -329,7 +356,9 @@ export default {
 
         if (plan.action === 'disable') {
           for (const server of plan.targets) overrides.set(server, true);
-          if (!(await reloadAndSettle())) {
+          const outcome = await reloadAndSettle();
+          debugLog(`[oxidegate-lens] MCP disabled-by-default reload=${outcome.reloadMs}ms settle=${outcome.settleMs}ms settled=${outcome.settled}`);
+          if (!outcome.settled) {
             console.warn(
               `[oxidegate-lens] MCP disabled-by-default: status did not reflect the override within ${SETTLE_TIMEOUT_MS}ms; the notice below shows what was read, not what was asked`,
             );

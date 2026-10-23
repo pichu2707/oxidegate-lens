@@ -18,6 +18,7 @@ import {
   noticeToLogLine,
   mcpToolInput,
   overridesSettled,
+  waitUntilSettled,
   V2_DEGRADATIONS,
   summarizeMcpStatus,
   valveResult,
@@ -125,6 +126,88 @@ test('overridesSettled: unreadable status is never "settled"; no overrides trivi
   assert.equal(overridesSettled(null, new Map([['a', true]])), false);
   assert.equal(overridesSettled(null, new Map()), true);
   assert.equal(overridesSettled({}, new Map([['gone', true]])), true);
+});
+
+// ---------------------------------------------------- event-driven settle
+
+function fakeBus() {
+  const listeners = new Set();
+  return {
+    subscribe: (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    emit: () => [...listeners].forEach((cb) => cb()),
+    size: () => listeners.size,
+  };
+}
+
+test('waitUntilSettled: already settled -> true after ONE check, without waiting for any event', async () => {
+  const bus = fakeBus();
+  let checks = 0;
+  const ok = await waitUntilSettled({ check: async () => (checks++, true), subscribe: bus.subscribe, timeoutMs: 60_000 });
+  assert.equal(ok, true);
+  assert.equal(checks, 1);
+  assert.equal(bus.size(), 0, 'unsubscribed');
+});
+
+test('waitUntilSettled: wakes on the event, not on a poll tick', async () => {
+  const bus = fakeBus();
+  let state = false;
+  let checks = 0;
+  const p = waitUntilSettled({ check: async () => (checks++, state), subscribe: bus.subscribe, timeoutMs: 60_000 });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(checks, 1, 'no polling while nothing changes');
+  state = true;
+  bus.emit();
+  assert.equal(await p, true);
+  assert.equal(checks, 2);
+  assert.equal(bus.size(), 0);
+});
+
+test('waitUntilSettled: an event that lands DURING the check is not lost (no race)', async () => {
+  const bus = fakeBus();
+  let state = false;
+  let checks = 0;
+  const check = async () => {
+    checks++;
+    const seen = state; // reading happens first...
+    if (checks === 1) {
+      await new Promise((r) => setTimeout(r, 10));
+      state = true; // ...then the world changes and announces it before check() resolves
+      bus.emit();
+    }
+    return seen;
+  };
+  const ok = await waitUntilSettled({ check, subscribe: bus.subscribe, timeoutMs: 60_000 });
+  assert.equal(ok, true);
+  assert.equal(checks, 2);
+});
+
+test('waitUntilSettled: safety-net timeout returns false (honest), and still unsubscribes', async () => {
+  const bus = fakeBus();
+  const started = Date.now();
+  const ok = await waitUntilSettled({ check: async () => false, subscribe: bus.subscribe, timeoutMs: 40 });
+  assert.equal(ok, false);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(bus.size(), 0);
+});
+
+test('waitUntilSettled: events that do not settle keep waiting until the deadline', async () => {
+  const bus = fakeBus();
+  const p = waitUntilSettled({ check: async () => false, subscribe: bus.subscribe, timeoutMs: 60 });
+  bus.emit();
+  bus.emit();
+  assert.equal(await p, false);
+});
+
+test('waitUntilSettled: a throwing check propagates and still unsubscribes', async () => {
+  const bus = fakeBus();
+  await assert.rejects(
+    waitUntilSettled({ check: async () => { throw new Error('boom'); }, subscribe: bus.subscribe, timeoutMs: 1000 }),
+    /boom/,
+  );
+  assert.equal(bus.size(), 0);
 });
 
 // ---------------------------------------------------------------- events
