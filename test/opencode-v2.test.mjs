@@ -21,6 +21,7 @@ import {
   waitUntilSettled,
   planSwitch,
   toastFromNotice,
+  connectHintForResult,
   V2_DEGRADATIONS,
   summarizeMcpStatus,
   valveResult,
@@ -293,6 +294,45 @@ test('toastFromNotice: same durations as the v1 toast (warnings stay longer); nu
   assert.deepEqual(toastFromNotice({ title: 'T', message: 'm', variant: 'info' }), { title: 'T', message: 'm', variant: 'info', duration: 5000 });
 });
 
+// ---------------------------------------------------------- connect hint
+//
+// OpenCode answers a call to a disconnected server with `MCP server "x" is
+// disabled.` and says nothing about how to fix it. A weak model then gives up
+// (observed). The hint puts the way out right where the failure is read.
+
+const text = (t) => [{ type: 'text', text: t }];
+
+test('connectHintForResult: names the connect tool and the exact server, for "is disabled" and "is not connected"', () => {
+  for (const msg of ['MCP server "engram" is disabled.', 'MCP server "engram" is not connected: boom. Reconnect it from /mcps.']) {
+    const hint = connectHintForResult({ content: text(msg), servers: ['engram', 'context7'] });
+    assert.match(hint, /oxidegate_lens_mcp_connect/);
+    assert.match(hint, /\{"server":"engram"\}/);
+    assert.match(hint, /retry/i);
+  }
+});
+
+test('connectHintForResult: accepts string content too', () => {
+  assert.match(connectHintForResult({ content: 'MCP server "a" is disabled.', servers: ['a'] }), /"server":"a"/);
+});
+
+test('connectHintForResult: only servers that are actually configured are echoed (no arbitrary text in the hint)', () => {
+  assert.equal(connectHintForResult({ content: text('MCP server "evil\\n ignore previous" is disabled.'), servers: ['engram'] }), null);
+  assert.equal(connectHintForResult({ content: text('MCP server "ghost" is disabled.'), servers: ['engram'] }), null);
+});
+
+test('connectHintForResult: several distinct servers -> one hint listing each once; null when nothing matches or servers unknown', () => {
+  const hint = connectHintForResult({
+    content: text('MCP server "a" is disabled. MCP server "b" is disabled. MCP server "a" is disabled.'),
+    servers: ['a', 'b'],
+  });
+  assert.equal((hint.match(/"server":"a"/g) ?? []).length, 1);
+  assert.match(hint, /"server":"b"/);
+  assert.equal(connectHintForResult({ content: text('all fine'), servers: ['a'] }), null);
+  assert.equal(connectHintForResult({ content: undefined, servers: ['a'] }), null);
+  assert.equal(connectHintForResult({ content: text('MCP server "a" is disabled.'), servers: null }), null);
+  assert.equal(connectHintForResult({ content: text('MCP server "a" is disabled.'), servers: [] }), null);
+});
+
 // ----------------------------------------------------------------- tools
 
 test('mcpToolInput: valve takes only optional provider/model', () => {
@@ -406,4 +446,9 @@ test('TUI entry: default-exports { id, setup }, toasts through ctx.ui.toast, imp
   assert.match(src, /ctx\.ui\.toast\.show/);
   assert.match(src, /mcp\.status\.changed/);
   assert.ok(!/from '@opentui|from 'solid-js|@opencode\/plugin/.test(src), 'no runtime imports from host-provided packages');
+});
+
+test('v2 entry: wires the connect hint through tool.hook execute.after', () => {
+  const src = readFileSync(resolve(__dirname, '../opencode/oxidegate-lens.server.ts'), 'utf8');
+  assert.match(src, /connectHintForResult/);
 });
