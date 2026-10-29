@@ -59,13 +59,13 @@ test('failed servers are offered (connecting retries them) and flagged; needs_au
   });
   assert.match(text, /f \(failed\): ft/);
   assert.match(text, /d: dt/);
-  assert.ok(!/\bn:|: nt\b|\bp:|: pt\b/.test(text));
+  assert.ok(!/\bn:|\bnt\b|\bp:|\bpt\b/.test(text));
 });
 
 test('nothing disconnected -> says so briefly, still a valid manual-connect description', () => {
   const text = buildConnectDescription({ status: { a: { status: 'connected' } }, snapshot: known([srv('a', ['t'])]) });
   assert.match(text, /no disconnected/i);
-  assert.ok(text.length < 600, `length=${text.length}`);
+  assert.ok(text.length < 520, `length=${text.length}`);
 });
 
 test('unreadable status is stated, not read as "nothing disconnected"', () => {
@@ -127,6 +127,10 @@ test('connect warns that changing the tool list mid-conversation breaks the prom
   assert.match(text, /prompt cache/i);
   assert.match(text, /once/i);
   assert.match(text, /early/i);
+  // The cache note must never read as "don't connect": with disable-by-default
+  // every connect is mid-conversation, and lazy connect depends on the model
+  // still connecting when a task needs the server.
+  assert.match(text, /if a task needs it, connect it/i);
   assert.ok(!/\d+(\.\d+)?\s*x\b|\$/i.test(text), 'no invented prices');
 });
 

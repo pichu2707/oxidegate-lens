@@ -652,15 +652,17 @@ empiezas con 1 MCP sin conectar: context7 (4.6 kB). Siguen activos: engram (17.2
 Para volver a abrir alguno: oxidegate_lens_mcp_connect. Detalle completo: oxidegate_lens_mcp_valve.
 ```
 
-Desconectar al arrancar es gratis: todavía no hay nada en caché. Cambiar el
-conjunto de MCP **a mitad de sesión** (conectar o desconectar) altera la lista
-de herramientas e invalida la caché de prompt de toda la conversación, así que
-la siguiente petición reenvía el historial entero sin caché. Por eso las
-descripciones de estas tools le dicen al modelo que conecte cada servidor una
-sola vez y lo antes posible, y que no desconecte en caliente salvo que lo pidas.
-
 Ver el estado, medir el coste y saber cómo revertirlo, sin ejecutar ningún
 comando. Después avisa cuando alguno se conecta.
+
+Desconectar al arrancar es gratis: todavía no hay nada en caché. Cambiar el
+conjunto de MCP **a mitad de sesión** (conectar o desconectar) altera la lista
+de herramientas y puede invalidar la caché de prompt de la conversación, de
+modo que la siguiente petición reenvíe el historial sin caché. Por eso las
+descripciones de `oxidegate_lens_mcp_connect`, `oxidegate_lens_mcp_disconnect`
+y `oxidegate_lens_mcp_valve` le dicen al modelo que conecte lo que necesite,
+una sola vez y lo antes posible, y que no desconecte en caliente salvo que lo
+pidas.
 
 **Por qué el interruptor está en el fichero y no en una variable de entorno.**
 Estuvo en `OXIDEGATE_MCP_DISABLE_BY_DEFAULT` y falló una prueba real: el propio
