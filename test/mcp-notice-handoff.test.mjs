@@ -46,5 +46,10 @@ test('write: a null notice removes nothing and writes nothing (no notice stays n
 });
 
 test('write: an unwritable path never throws (best-effort channel)', () => {
-  assert.equal(writeStartupNotice({ path: '/proc/definitely/not/writable/x.json', notice, now: 1 }), null);
+  // A directory under a regular file fails with ENOTDIR everywhere. /proc was
+  // used before, but mkdirSync({ recursive: true }) spins forever there on
+  // some Node/kernel combinations instead of throwing.
+  const file = join(mkdtempSync(join(tmpdir(), 'lens-handoff-')), 'file');
+  writeFileSync(file, '');
+  assert.equal(writeStartupNotice({ path: join(file, 'nested', 'x.json'), notice, now: 1 }), null);
 });
