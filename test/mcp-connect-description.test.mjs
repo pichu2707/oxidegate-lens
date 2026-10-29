@@ -59,13 +59,13 @@ test('failed servers are offered (connecting retries them) and flagged; needs_au
   });
   assert.match(text, /f \(failed\): ft/);
   assert.match(text, /d: dt/);
-  assert.ok(!/\bn:|nt\b|\bp:|pt\b/.test(text));
+  assert.ok(!/\bn:|: nt\b|\bp:|: pt\b/.test(text));
 });
 
 test('nothing disconnected -> says so briefly, still a valid manual-connect description', () => {
   const text = buildConnectDescription({ status: { a: { status: 'connected' } }, snapshot: known([srv('a', ['t'])]) });
   assert.match(text, /no disconnected/i);
-  assert.ok(text.length < 400);
+  assert.ok(text.length < 600, `length=${text.length}`);
 });
 
 test('unreadable status is stated, not read as "nothing disconnected"', () => {
@@ -120,4 +120,31 @@ test('disconnect/valve descriptions are not framed as test-only and point at the
   }
   assert.match(DISCONNECT_DESCRIPTION, /oxidegate_lens_mcp_connect/);
   assert.match(DISCONNECT_DESCRIPTION, /no longer need|free/i);
+});
+
+test('connect warns that changing the tool list mid-conversation breaks the prompt cache, so connect once and early', () => {
+  const text = buildConnectDescription({ status: { a: { status: 'disabled' } }, snapshot: known([srv('a', ['t'])]) });
+  assert.match(text, /prompt cache/i);
+  assert.match(text, /once/i);
+  assert.match(text, /early/i);
+  assert.ok(!/\d+(\.\d+)?\s*x\b|\$/i.test(text), 'no invented prices');
+});
+
+test('disconnect warns that doing it mid-conversation re-sends the history uncached; only at session start or on request', () => {
+  assert.match(DISCONNECT_DESCRIPTION, /prompt cache/i);
+  assert.match(DISCONNECT_DESCRIPTION, /uncached/i);
+  assert.match(DISCONNECT_DESCRIPTION, /start of a session/i);
+  assert.match(DISCONNECT_DESCRIPTION, /user (explicitly )?asks/i);
+});
+
+test('valve does not suggest toggling servers without the cache caveat', () => {
+  assert.match(VALVE_DESCRIPTION, /prompt cache/i);
+});
+
+test('the cache note never pushes any variant past the hard cap', () => {
+  const names = Array.from({ length: 30 }, (_, i) => `s${String(i).padStart(2, '0')}`);
+  const status = Object.fromEntries(names.map((n) => [n, { status: 'disabled' }]));
+  const text = buildConnectDescription({ status, snapshot: known(names.map((n) => srv(n, ['a_long_tool_name_here', 'b', 'c', 'd', 'e']))) });
+  assert.ok(Buffer.byteLength(text) <= 1500, `bytes=${Buffer.byteLength(text)}`);
+  assert.match(text, /prompt cache/i);
 });
