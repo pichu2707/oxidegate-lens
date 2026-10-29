@@ -167,6 +167,13 @@ Revisa, en este orden (el 90% está en los dos primeros):
 > como se describe. Es un punto de partida, no una integración probada. Si estás
 > empezando, **sáltate esta parte**.
 
+> ⚠️ **OpenCode 2.x:** los pasos 1 y 2b de abajo (copiar un `.ts` suelto y
+> apuntar a él) son de **OpenCode 1.x** y en 2.x no funcionan: un plugin de
+> fichero suelto se rechaza. En 2.x instala el plugin con
+> `opencode plugin add oxidegate-lens` y sigue con los pasos 2a, 3 y 4. El
+> detalle (ruta manual, entrada `./tui`, `cli.json`) está en la sección
+> [Instalación del README](../README.md#instalación).
+
 En OpenCode hacen falta **dos piezas**, no una:
 
 | Pieza | Para qué sirve |

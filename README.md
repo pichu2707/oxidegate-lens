@@ -33,13 +33,21 @@ arranca pero sus tres tools manuales de la válvula no existen, y te lo dice:
 Por npm sí llega completo, y en un solo comando — sin tocar ningún JSON:
 
 ```sh
-opencode plugin oxidegate-lens
+opencode plugin add oxidegate-lens   # OpenCode 2.x
+opencode plugin oxidegate-lens       # OpenCode 1.x
 ```
 
 `opencode plugin` es el instalador del propio OpenCode: descarga el paquete y
 **actualiza tu configuración él mismo**. OpenCode instala los plugins de npm en
-su propia caché (`~/.cache/opencode/node_modules/`), no en el `node_modules`
-de tu proyecto.
+su propia caché (`~/.cache/opencode/`), no en el `node_modules` de tu proyecto.
+
+En **OpenCode 2.x** esa única entrada basta para las dos mitades: el plugin de
+servidor y la entrada `./tui`, que es la que muestra los avisos en pantalla.
+OpenCode carga la entrada `./tui` del mismo paquete por su cuenta; aparece en
+`/plugins` como `oxidegate-lens.tui`. **No añadas `oxidegate-lens/tui`** a
+`cli.json`: OpenCode no lo resuelve como subruta del paquete y lo marca como
+plugin fallido. (En 2.x la configuración del TUI vive en `cli.json`; un
+`tui.json` antiguo se migra ahí en el primer arranque y después se ignora.)
 
 Si prefieres hacerlo a mano, o quieres fijar la versión, también vale instalar
 el paquete y apuntar a la ruta:
@@ -47,6 +55,22 @@ el paquete y apuntar a la ruta:
 ```sh
 npm install oxidegate-lens
 ```
+
+En **OpenCode 2.x** la ruta tiene que ser el **directorio** del paquete, y
+**absoluta**:
+
+```json
+{
+  "plugin": ["/ruta/a/tu/proyecto/node_modules/oxidegate-lens"]
+}
+```
+
+Una ruta a un fichero `.ts` se rechaza (`configured plugin path must be a
+directory`), y una ruta relativa se resuelve contra el directorio del servicio
+de OpenCode (tu `$HOME`), no contra el del `opencode.json`, así que falla en
+cuanto abres el TUI aunque `opencode debug agents` la cargue.
+
+En **OpenCode 1.x**, la ruta al fichero:
 
 ```json
 {
