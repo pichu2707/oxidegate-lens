@@ -11,6 +11,30 @@ muestra los hechos que sí puede medir, por separado, sin mezclarlos.
 
 ## Instalación
 
+### Qué versión va con qué
+
+| `oxidegate-lens` | OpenCode | Instalación | Estado |
+| ---------------- | -------- | ----------- | ------ |
+| **`0.8.x`** (0.8.0, 0.8.1) | **2.x** y **1.x** | 2.x: `opencode plugin add oxidegate-lens` · 1.x: `opencode plugin oxidegate-lens` | Verificado en OpenCode **2.2.2**. El camino de 1.x no se ha vuelto a probar desde 0.8.0, pero su código se dejó intacto. |
+| **`<= 0.7.x`** | **solo 1.x** | `opencode plugin oxidegate-lens` | **No carga en 2.x**: OpenCode 2.x exige un export por defecto con `id` y `setup`. Verificado históricamente en OpenCode 1.18.4 y 1.18.5. |
+
+Desde la `0.8.0` un único export por defecto lleva las dos formas, así que **el
+mismo paquete sirve para 1.x y 2.x**. Si tienes OpenCode 2.x, necesitas `>= 0.8.0`.
+
+Lo que cambia en 2.x respecto a 1.x:
+
+- Conectar y desconectar un servidor MCP pasa a ser un **override de la
+  configuración más una recarga**.
+- Los avisos del lado servidor salen por el stderr del servicio de OpenCode; los
+  avisos en pantalla los muestra la entrada `./tui`.
+- El recuento de tools **no filtra por proveedor ni por modelo**.
+
+¿Ya tenías la `0.7.x`? Mira [Actualizar desde 0.7.x](#actualizar-desde-07x).
+Y ésta es solo la mitad de la compatibilidad: la de la lente con **el proxy
+OxideGate** está en [Requisitos](#compatibilidad-con-el-proxy-oxidegate).
+
+### Con Homebrew (solo la línea de comandos)
+
 ```sh
 brew install pichu2707/tap/oxidegate-lens
 ```
@@ -85,6 +109,17 @@ quien mide:
 brew install pichu2707/tap/oxidegate
 ```
 
+### Actualizar desde 0.7.x
+
+Al subir de la `0.7.x` a la `0.8.x`, OpenCode puede seguir sirviendo la versión
+vieja desde su caché (`~/.cache/opencode/`). Si el plugin no cambia de versión
+tras actualizar, limpia esa caché y reinstálalo:
+
+```sh
+oxidegate-savings --clear-opencode-cache
+opencode plugin add oxidegate-lens    # OpenCode 2.x  (1.x: opencode plugin oxidegate-lens)
+```
+
 ---
 
 ## Empieza aquí
@@ -131,6 +166,10 @@ veredicto**, más un aviso:
 3. **Tokens de contexto** — otra moneda, aparte. Si el esquema, además de viajar
    en el body, también ocupa el contexto del modelo por adelantado
    (`deferred_tools`). Nunca cambia un byte de la tabla.
+
+![Terminal ejecutando oxidegate-savings: tabla con bytes por servidor MCP (github, filesystem, context7, postgres) y el ahorro por petición de desconectarlos](https://raw.githubusercontent.com/pichu2707/oxidegate-lens/main/docs/media/savings.gif)
+
+*`oxidegate-savings` con datos de ejemplo: una fila por servidor MCP y el ahorro por petición.*
 
 Ejemplo real, Claude Code hablando con Anthropic a través de OxideGate, con los
 4 servidores MCP disponibles llegando los 4:
@@ -356,6 +395,10 @@ Ignorarlas lleva a conclusiones falsas:
 
 ## `oxidegate-sessions` — coste por sesión, no bytes por servidor
 
+![Terminal ejecutando oxidegate-sessions: tabla de sesiones con turnos, coste, entrada, caché leída y salida](https://raw.githubusercontent.com/pichu2707/oxidegate-lens/main/docs/media/sessions.gif)
+
+*`oxidegate-sessions` con datos de ejemplo: coste atribuible a cada sesión.*
+
 `oxidegate-savings` responde *¿qué pesa esta petición?* Este segundo comando
 responde una pregunta distinta, en otra moneda: **¿cuánto costó ESTA sesión
 de trabajo?** Lee `GET /sessions` de OxideGate — una agregación por
@@ -440,16 +483,6 @@ devuelve **400**, y este comando imprime el mensaje del propio proxy
 
 - **OxideGate en ejecución** y accesible por HTTP (puerto por defecto `8080`; en
   desarrollo suele ser otro, ej. `8899`, vía la variable `OXIDEGATE_PORT`).
-
-### Compatibilidad de versiones
-
-| oxidegate-lens | OxideGate | Qué pasa |
-|---|---|---|
-| `0.2.x` | `>= 0.2.0` | Todo. Incluye el bloque «tokens de contexto» (`deferred_tools`, por servidor). |
-| `0.2.x` | `< 0.2.0` | **No se rompe.** Los campos nuevos no existen en ese proxy, así que el reporte los da por **DESCONOCIDOS** y lo dice. Un dato ausente NUNCA se muestra como un cero. |
-
-Esa degradación no es una promesa: está **cubierta por tests** (`test/oxidegate-savings.test.mjs`,
-defectos 5 y 6). Si alguien la rompe, la suite se pone roja.
 - **Node 24 o superior** (usa `fetch` y `AbortSignal.timeout` globales, sin
   dependencias externas).
 - **El comando `claude` en el PATH**, sólo si quieres el bloque "disponibles vs.
@@ -457,6 +490,25 @@ defectos 5 y 6). Si alguien la rompe, la suite se pone roja.
   Sin él, el reporte sigue funcionando: ese bloque dice que no pudo leer tu
   configuración y muestra sólo lo que ve directamente en el cable — nunca lo
   esconde ni lo confunde con un cero.
+
+### Compatibilidad con el proxy OxideGate
+
+Esta tabla responde a **lente ↔ proxy OxideGate**. La de **lente ↔ OpenCode** está
+arriba, en [Qué versión va con qué](#qué-versión-va-con-qué).
+
+La lente no exige una versión mínima de OxideGate: **le pregunta al proxy qué
+publica** (`GET /version` declara sus endpoints y campos) y se adapta.
+
+| Si el proxy… | Qué hace la lente |
+|---|---|
+| publica el endpoint o campo (p. ej. `/sessions`, `deferred_tools`) | Lo usa y lo muestra. |
+| declara su contrato y **no** incluye ese endpoint o campo | Lo da por **DESCONOCIDO** y lo dice. **No se rompe.** |
+| es anterior a `/version` (responde 404) | Lo trata como «proxy previo al contrato», no como un error. |
+| no responde o contesta algo inesperado | Dice que no pudo preguntar. |
+
+Un dato ausente **NUNCA** se muestra como un cero. Esa degradación no es una
+promesa: está **cubierta por tests** (`test/oxidegate-savings.test.mjs`, defectos 5 y 6,
+y `test/proxy-version.test.mjs`). Si alguien la rompe, la suite se pone roja.
 
 ---
 
@@ -605,6 +657,10 @@ otro servicio, o a un proxy caído, produce el informe completo en vez de un
 
 ### Elegirlo sin editar JSON
 
+![Selector interactivo oxidegate-mcp: se enciende la válvula con d, se marcan servidores con espacio y se sale con q sin guardar](https://raw.githubusercontent.com/pichu2707/oxidegate-lens/main/docs/media/mcp.gif)
+
+*`oxidegate-mcp`: `d` enciende la válvula, `espacio` marca qué servidores se quedan y `q` sale **sin guardar** (sólo `enter` escribe).*
+
 ```
 oxidegate-mcp
 ```
@@ -706,6 +762,21 @@ medir en local (Warp), y solo uno expone un slot de UI para un panel propio
 `bin/oxidegate-savings.mjs` y `lib/mcp-config.mjs`. La matriz es la explicación para
 humanos de por qué existe el bloque "disponibles vs. llegados"; mantener el código
 y el doc en sync es trabajo de quien los edita, no algo automático.
+
+---
+
+## Regenerar las capturas animadas
+
+Los GIF de este README se graban con [vhs](https://github.com/charmbracelet/vhs)
+a partir de los guiones de `docs/media/tapes/`. Usan **datos de ejemplo
+inventados** (`docs/media/demo-proxy.mjs`) y un `HOME` desechable, así que no leen
+ni escriben nada tuyo. Desde la raíz del repo:
+
+```sh
+vhs docs/media/tapes/savings.tape
+vhs docs/media/tapes/sessions.tape
+vhs docs/media/tapes/mcp.tape
+```
 
 ---
 
