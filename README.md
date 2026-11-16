@@ -15,7 +15,7 @@ muestra los hechos que sí puede medir, por separado, sin mezclarlos.
 
 | `oxidegate-lens` | OpenCode | Instalación | Estado |
 | ---------------- | -------- | ----------- | ------ |
-| **`0.8.x`** (0.8.0, 0.8.1) | **2.x** y **1.x** | 2.x: `opencode plugin add oxidegate-lens` · 1.x: `opencode plugin oxidegate-lens` | Verificado en OpenCode **2.2.2**. El camino de 1.x no se ha vuelto a probar desde 0.8.0, pero su código se dejó intacto. |
+| **`0.8.x`** (0.8.0, 0.8.1, 0.8.2) | **2.x** y **1.x** | 2.x: `opencode plugin add oxidegate-lens` · 1.x: `opencode plugin oxidegate-lens` | Verificado en OpenCode **2.2.2** y, la 0.8.1, en OpenCode **1.19.4**. En 1.x, hasta la 0.8.1 los avisos no salen en pantalla; la 0.8.2 lo arregla (ver [Qué está verificado](#plugin-de-opencode-verificado)). |
 | **`<= 0.7.x`** | **solo 1.x** | `opencode plugin oxidegate-lens` | **No carga en 2.x**: OpenCode 2.x exige un export por defecto con `id` y `setup`. Verificado históricamente en OpenCode 1.18.4 y 1.18.5. |
 
 Desde la `0.8.0` un único export por defecto lleva las dos formas, así que **el
@@ -555,27 +555,75 @@ El reporte de ahorro de arriba es el camino principal y está verificado. Esta
 otra superficie existe, pero es secundaria — instalarla y su paso a paso están
 en **[docs/GUIA-INSTALACION.md](docs/GUIA-INSTALACION.md)**.
 
-- **Plugin de OpenCode** (`opencode/oxidegate-lens.ts`): por sí solo no enruta
-  nada — sólo lee lo que OxideGate ya midió. Para que el tráfico pase por
-  OxideGate hace falta configurarlo aparte: con un bloque `provider` en
-  `opencode.json` (ver `examples/opencode.json`), o parcheando `fetch` desde
-  otro plugin. El bloque `provider` es una forma de enrutar, no la única.
+- **Plugin de OpenCode**: por sí solo no enruta nada — sólo lee lo que
+  OxideGate ya midió. Para que el tráfico pase por OxideGate hace falta
+  configurarlo aparte: con un bloque `provider` en `opencode.json` (ver
+  `examples/opencode.json`), o parcheando `fetch` desde otro plugin. El bloque
+  `provider` es una forma de enrutar, no la única.
 
-  **Qué está verificado y qué no**, con esa distinción a propósito:
+  Qué fichero carga cada versión de OpenCode:
 
-  - **Verificado** contra un OpenCode 1.18.4 real: `client.mcp.status`,
-    `client.mcp.connect` y `client.mcp.disconnect`. Un detalle que sólo
-    aparece ejecutándolo: tras un `disconnect` el SDK devuelve el estado
-    **`"disabled"`**, no `"disconnected"`. El plugin sobrevive a eso porque
-    pasa el estado del SDK **verbatim** y nunca lo compara contra una cadena
-    fija. No introduzcas una.
-  - **Verificado** también contra un OpenCode real: el aviso de arranque (con
-    un servidor protegido preservado y el resto desconectado), y el sondeo
-    sobre `session.idle` — se conectó un MCP a mano y el aviso de transición
-    salió en el siguiente reposo, sin que OpenCode emita ningún evento de MCP.
-  - **No verificado** contra un OpenCode real: el hook `tool.execute.after`.
-    Se ha ejercitado con un cliente falso, lo que prueba que el cableado corre,
-    no que OpenCode lo dispare cuando creemos.
+  | OpenCode | Entrada | Fichero |
+  |---|---|---|
+  | **1.x** | `./server` (instalado como paquete) o la ruta al `.ts` | la función de `opencode/oxidegate-lens.ts`, llegue por la clave `server` de `oxidegate-lens.server.ts` o por la ruta directa |
+  | **2.x** | `./server` + `./tui` | `setup` de `opencode/oxidegate-lens.server.ts` en el servicio, y `opencode/oxidegate-lens.tui.ts` en el TUI, que OpenCode carga solo desde el mismo paquete |
+
+  El export por defecto de `oxidegate-lens.server.ts` lleva las dos formas
+  (`server` para 1.x, `id` + `setup` para 2.x). Con el paquete instalado desde
+  npm, 1.x solo ejecuta `server`. Pero en 1.19.4, cargado por **ruta de
+  fichero**, 1.x ejecuta **también** `setup` (en el primer turno sale en el log
+  el aviso «running on OpenCode 2.x with reduced capabilities»). En la prueba no
+  causó daño: las tools no se duplican y conectar/desconectar siguió
+  funcionando en unos 6 ciclos. Aun así, «cada runtime ignora la clave que no
+  conoce» no es del todo cierto.
+
+  <a id="plugin-de-opencode-verificado"></a>
+  **Qué está verificado y qué no**, con esa distinción a propósito y por
+  versión:
+
+  **OpenCode 1.x** — probada la **0.8.1** contra un OpenCode **1.19.4** real
+  (2026-11-16), en modo headless (`opencode serve` + API HTTP), con dos MCP
+  stdio de prueba y un modelo gratuito (`opencode/big-pickle`) haciendo
+  llamadas reales a las tools:
+
+  - **Verificado**: la instalación con `opencode plugin oxidegate-lens@0.8.1`
+    (detecta las entradas server + tui) y la entrada manual por ruta al
+    fichero. El plugin carga sin errores y registra
+    `oxidegate_lens_mcp_valve`, `_connect` y `_disconnect`.
+  - **Verificado**: la desconexión por defecto al arrancar (el servidor
+    protegido sigue conectado y el resto pasa a `disabled`), y
+    `oxidegate_lens_mcp_connect` / `_disconnect` en un turno real del modelo
+    (`result=true`, confirmado en `GET /mcp`).
+  - **Verificado** (ya en 1.18.4 y de nuevo en 1.19.4): tras un `disconnect`
+    el SDK devuelve **`"disabled"`**, no `"disconnected"`. El plugin sobrevive
+    a eso porque pasa el estado del SDK **verbatim** y nunca lo compara contra
+    una cadena fija. No introduzcas una.
+  - **Verificado**: el hook recibe `session.idle`, y el sondeo compone el aviso
+    de arranque y el de transición («se ha conectado: beta.»).
+  - **Fallaba hasta la 0.8.1, arreglado en la 0.8.2**: en 1.19.4 esos avisos
+    **no llegaban a la pantalla**. El plugin separaba `client.tui.showToast`
+    de su objeto antes de llamarlo, así que perdía el `this`
+    (`TypeError: ... 'this._client'`), y un `catch` vacío se tragaba el error.
+    La 0.8.2 lo llama sobre su objeto y lo cubre un test de regresión
+    (`test/plugin-toast-this-binding.test.mjs`); el arreglo **aún no se ha
+    vuelto a probar contra un OpenCode 1.x real**.
+  - **No ejecutado**: el TUI real de 1.x, el hook `tool.execute.after` (no
+    había un OxideGate escuchando) y la aprobación por `.oxidegate-lens.json`
+    (solo se usó la configuración por variables de entorno). El hook
+    `tool.execute.after` solo se ha ejercitado con un cliente falso, lo que
+    prueba que el cableado corre, no que OpenCode lo dispare cuando creemos.
+
+  **OpenCode 2.x**:
+
+  - **Verificado** contra un TUI real de la 2.2.2: la instalación con
+    `opencode plugin add`, la carga desde una ruta absoluta al directorio del
+    paquete, y que la entrada `./tui` se carga sola (sale en `/plugins` como
+    `oxidegate-lens.tui`).
+  - **Cubierto por tests, sin verificación registrada contra un OpenCode 2.x
+    real**: conectar y desconectar como override de la configuración más una
+    recarga, la espera por `mcp.status.changed`, y los avisos en pantalla con
+    `ctx.ui.toast.show`. El detalle de `"disabled"` de arriba es del SDK de
+    1.x; en 2.x el plugin no llama a `client.mcp.connect`/`disconnect`.
 
 ### Avisos de MCP y servidores protegidos
 
