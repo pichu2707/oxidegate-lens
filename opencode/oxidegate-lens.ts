@@ -146,11 +146,13 @@ function summarizeMcpStatus(status: unknown): string {
 }
 
 async function showMcpStatusToast(client: any, directory: string | undefined, status: unknown): Promise<void> {
-  const showToast = client?.tui?.showToast;
-  if (typeof showToast !== 'function') return;
+  // Call on the object, never detached: in the SDK `tui` is a class instance
+  // and `showToast` reads `this._client`.
+  const tui = client?.tui;
+  if (typeof tui?.showToast !== 'function') return;
 
   try {
-    await showToast({
+    await tui.showToast({
       body: {
         title: 'OxideGate MCP actual',
         message: summarizeMcpStatus(status).replace(/^MCP actual \(SDK\): /, ''),
@@ -159,10 +161,11 @@ async function showMcpStatusToast(client: any, directory: string | undefined, st
       },
       query: directory ? { directory } : undefined,
     });
-  } catch {
+  } catch (error) {
     // Toast support is best-effort: older OpenCode builds or non-TUI clients
     // may not expose it. The SDK status marker in tool output remains the
     // durable source of truth.
+    debugLog(`[oxidegate-lens] status toast failed: ${formatError(error)}`);
   }
 }
 
@@ -177,8 +180,8 @@ async function showNotice(
   notice: { title: string; message: string; variant: string } | null,
 ): Promise<void> {
   if (!notice) return;
-  const showToast = client?.tui?.showToast;
-  if (typeof showToast !== 'function') {
+  const tui = client?.tui;
+  if (typeof tui?.showToast !== 'function') {
     // No TUI to speak into. A refusal is a safety event, so it still reaches
     // stderr rather than evaporating with the toast surface.
     if (notice.variant === 'warning') console.warn(`[oxidegate-lens] ${notice.message}`);
@@ -186,7 +189,7 @@ async function showNotice(
   }
 
   try {
-    await showToast({
+    await tui.showToast({
       body: {
         title: notice.title,
         message: notice.message,
@@ -195,8 +198,9 @@ async function showNotice(
       },
       query: directory ? { directory } : undefined,
     });
-  } catch {
+  } catch (error) {
     // Best-effort, same as showMcpStatusToast: older builds may not expose it.
+    debugLog(`[oxidegate-lens] notice toast failed: ${formatError(error)}`);
   }
 }
 
